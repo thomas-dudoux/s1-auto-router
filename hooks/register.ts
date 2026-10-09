@@ -29,20 +29,25 @@ export const register: Register = (on) => {
 }
 
 /** The Routing flow for one Spawn: what to change on the Agent call, or undefined to leave it as written. */
-async function route($: Engine, e: any): Promise<{ model?: string } | undefined> {
+async function route($: Engine, e: any): Promise<{ model?: string; effort?: string } | undefined> {
   const type = e.subagent_type ?? 'general-purpose'
-  if (type === 'fork' || e.model !== undefined) return undefined
+  if (type === 'fork' || (e.model !== undefined && e.effort !== undefined)) return undefined
   const def = await agentDefinition($, type)
-  if (!def.found || def.frontmatter.model !== undefined) return undefined
+  if (!def.found) return undefined
 
   const config = DEFAULT_CONFIG
-  const tree = config.trees.model!
-  const questions = Object.fromEntries(questionsOf(tree).map(id => [id, config.questions[id]]))
+  const outputs = (['model', 'effort'] as const).filter(output =>
+    e[output] === undefined && def.frontmatter[output] === undefined && config.trees[output] !== undefined)
+  if (!outputs.length) return undefined
+  const ids: string[] = []
+  for (const output of outputs) questionsOf(config.trees[output]!, ids)
+  const questions = Object.fromEntries(ids.map(id => [id, config.questions[id]]))
   const state = buildState(e, def, offered.get(type), config.prompt_max_chars)
   const { answers } = await askS1($, state, questions)
-  const { value: model } = walk(tree, answers)
-  $.ui.toast(`S1 → ${model}`)
-  return { model }
+  const patch: { model?: string; effort?: string } = {}
+  for (const output of outputs) patch[output] = walk(config.trees[output]!, answers).value
+  $.ui.toast(`S1 → ${patch.model ?? e.model ?? def.frontmatter.model} · ${patch.effort ?? e.effort ?? def.frontmatter.effort}`)
+  return patch
 }
 
 async function agentDefinition($: Engine, type: string): Promise<AgentDefinition> {
