@@ -18,7 +18,13 @@ Managed by uv: Python 3.13 in `.venv/`, deps `decider-ai[metal]` and `mlx-lm` in
 - `uv run hf download midium-ai/decider-2b-dwq-4bit`: download the model (~1.06 GB, into `~/.cache/huggingface`).
 - The `decider-ai` package is imported as `decider`.
 
-There are no build, lint or test commands yet. Add them here as the tickets land.
+## Plugin commands
+
+The repo root is the plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`).
+
+- `claude plugin validate .`: check the manifest and hooks module.
+- `claude plugin test .`: run the mod's `*.test.ts` tests (no real I/O: answer `fs`, `http.fetch`, `process.run` events in the test).
+- `claude -p --plugin-dir . "..." < /dev/null`: load the mod headless. Debug logs (`--debug-file`) contain settings secrets: never keep or commit them.
 
 ## Conventions
 
