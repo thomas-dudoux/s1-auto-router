@@ -20,7 +20,9 @@ Managed by uv: Python 3.13 in `.venv/`, deps `decider-ai[metal]` and `mlx-lm` in
 
 Commands:
 
-- `uv run python -m pytest`: run the Python tests (no model needed).
+- `uv run pytest`: run the Python tests (no model needed).
+- `S1_MODEL=2B|4B uv run python -m s1.daemon`: run the S1 daemon in the foreground (HTTP/1.1 `POST /v1/answer` on the unix socket `~/.cache/s1-auto-router/s1.sock`, default model 2B).
+- `uv run python -m s1.client [socket]`: send a sample v1 request to the running daemon and print the answers (manual check).
 - `uv run python -m s1.bench [2B|4B] [repeats]`: measure S1 latency and RAM on the real model (6 default questions, 4k-char state).
 
 ## Conventions
