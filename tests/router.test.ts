@@ -7,7 +7,7 @@ const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
 type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; notReady?: boolean; noSocket?: boolean }
 
-function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void>; envBlock?: { name: string; wait: Promise<void>; when?: () => boolean } } = {}) {
+function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void>; readErrors?: Record<string, string>; envBlock?: { name: string; wait: Promise<void>; when?: () => boolean } } = {}) {
   const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
   on('env.get', async ($: any, e: any) => {
     if (setup.envBlock?.name === e.name && (setup.envBlock.when?.() ?? true)) await setup.envBlock.wait
@@ -18,10 +18,12 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
   on('session.model', () => ({ value: setup.parentModel }))
   on('turn.step', async function* () { return { answer: '', toolUses: [] } })
   on('process.run', ($: any, e: any) => { w.processes.push(e); if (s1.logFailure) return { deny: 'disk full' }; return { value: { exitCode: 0, stdout: '', stderr: '' } } })
-  on('fs.exists', ($: any, e: any) => ({ value: e.path.endsWith('ready.json') ? !s1.notReady : e.path.endsWith('s1.sock') ? !s1.noSocket : true }))
+  on('fs.exists', ($: any, e: any) => ({ value: e.path === `${HOME}/.cache/s1-auto-router/ready.json` ? !s1.notReady
+    : e.path === SOCKET ? !s1.noSocket : e.path.endsWith('/.venv/bin/python') || Object.hasOwn(files, e.path) }))
 
   on('fs.read', async ($: any, e: any) => {
     if (setup.readBlock) await setup.readBlock
+    if (setup.readErrors?.[e.path]) return { deny: setup.readErrors[e.path] }
     return e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }
   })
 
@@ -46,6 +48,21 @@ const call = (extra: object = {}) => ({ tool: 'Agent', description: 'list files'
 const yes = { yes: 0.9, no: 0.1 }
 const no = { yes: 0.1, no: 0.9 }
 const kind = (k: string) => Object.fromEntries(['locate', 'mechanical_edit', 'investigate', 'design', 'synthesize'].map(o => [o, o === k ? 0.8 : 0.05]))
+
+test('a denied known project agent definition fails open without replacing its Explicit values', async ($, on) => {
+  const path = `${ROOT}/.claude/agents/pinned.md`
+  const w = world(on, { answers: { M1: kind('locate'), M2: no, M3: no,
+    E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no } }, {
+    [path]: '---\nmodel: opus\neffort: max\n---\n',
+    [`${HOME}/.claude/agents/pinned.md`]: '---\ndescription: user fallback\n---\n',
+  }, {}, { readErrors: { [path]: 'EACCES permission denied' } })
+  await $.tool.call(call({ subagent_type: 'pinned', effort: undefined }))
+  expect(w.spawned).toMatchObject(call({ subagent_type: 'pinned', effort: undefined }))
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.spawned.effort).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.logs.some(l => l.includes('fail-open') && l.includes('EACCES'))).toBe(true)
+})
 
 test('a Spawn with neither Explicit value gets Model and Effort in one S1 request', async ($, on) => {
   const w = world(on, { answers: {
@@ -391,6 +408,34 @@ test('a Spawn with no socket starts S1 and fails open, then later Spawns route',
 const customConfig = (model: unknown = 'sonnet', effort: unknown = 'medium', extra: object = {}) => JSON.stringify({
   questions: {}, trees: { model, effort }, ...extra,
 })
+
+test('a denied known project Routing Config fails open instead of selecting the user config', async ($, on) => {
+  const path = `${ROOT}/.claude/s1-auto-router.yaml`
+  const w = world(on, {}, { [path]: customConfig('haiku', 'low'),
+    [`${HOME}/.claude/s1-auto-router.json`]: customConfig('opus', 'high'),
+  }, {}, { readErrors: { [path]: 'EIO cannot read config' } })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject(call({ effort: undefined }))
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.spawned.effort).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:') && t.includes('EIO'))).toBe(true)
+})
+
+for (const option of ['toString', 'constructor', '__proto__']) {
+  test(`a custom switch option ${option} uses its default and does not discard independent Effort routing`, async ($, on) => {
+    const w = world(on, { answers: { work: { [option]: 0.9, ordinary: 0.1 } } }, {
+      [`${ROOT}/.claude/s1-auto-router.json`]: customConfig({ switch: 'work', cases: { ordinary: 'haiku' }, default: 'sonnet' }, 'medium', {
+        questions: { work: { type: 'choice', text: 'What work is needed?', options: [
+          { id: option, description: 'work that takes the default branch' }, { id: 'ordinary', description: 'a simple lookup' },
+        ] } },
+      }),
+    })
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium' })
+    expect(w.toasts).toEqual(['S1 → sonnet · medium'])
+  })
+}
 
 test('the env Routing Config wins whole over project and user files', async ($, on) => {
   const w = world(on, {}, {

@@ -167,7 +167,8 @@ async function agentDefinition($: Engine, type: string): Promise<AgentDefinition
 }
 
 async function readOrUndefined($: Engine, path: string): Promise<string | undefined> {
-  try { return await $.fs.read(path) as string } catch { return undefined }
+  if (!await $.fs.exists(path)) return undefined
+  return await $.fs.read(path) as string
 }
 
 /** One v1 request over the S1 socket; the tool.call hook budgets the entire Routing flow. */
