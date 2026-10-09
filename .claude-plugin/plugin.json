@@ -1,0 +1,6 @@
+{
+  "name": "s1-auto-router",
+  "version": "0.1.0",
+  "description": "Routes the Model and Effort of every Agent Spawn with a local S1 model",
+  "author": { "name": "Thomas DUDOUX" }
+}

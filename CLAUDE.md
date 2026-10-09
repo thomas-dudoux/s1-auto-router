@@ -23,6 +23,14 @@ Commands:
 - `uv run python -m pytest`: run the Python tests (no model needed).
 - `uv run python -m s1.bench [2B|4B] [repeats]`: measure S1 latency and RAM on the real model (6 default questions, 4k-char state).
 
+## Plugin commands
+
+The repo root is the plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`).
+
+- `claude plugin validate .`: check the manifest and hooks module.
+- `claude plugin test .`: run the mod's `*.test.ts` tests (no real I/O: answer `fs`, `http.fetch`, `process.run` events in the test).
+- `claude -p --plugin-dir . "..." < /dev/null`: load the mod headless. Debug logs (`--debug-file`) contain settings secrets: never keep or commit them.
+
 ## Conventions
 
 - Commit messages follow the Conventional Commits spec. The `conventional-commit` skill is installed for this: it lives in `.agents/skills/conventional-commit/`, `.claude/skills/conventional-commit` symlinks to it.
