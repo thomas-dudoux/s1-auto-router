@@ -14,3 +14,7 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.ruff.lint.per-file-ignores]
+# This HTTP boundary returns 500 for unexpected inference errors, without logging prompts.
+"s1/daemon.py" = ["BLE001"]
