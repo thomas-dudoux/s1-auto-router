@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `s1-auto-router` is a Claude Code plugin (mod) that routes the Model and Effort of every `Agent` spawn using a local System One model (Decider 2B/4B, MLX). It has two parts: a TypeScript mod handling `agent.spawn`, and a Python S1 daemon on a unix socket. Design and decisions are settled; no source code exists yet.
 
-- Spec: `.scratch/s1-auto-router/spec.md`. Tickets: `.scratch/s1-auto-router/issues/`, numbered in dependency order.
+- Spec: `.scratch/*/spec.md`. Tickets: `.scratch/*/issues/`, numbered in dependency order.
 - Terms: `GLOSSARY.md` (Spawn, Routing, Explicit value, Ceiling, Abstain, Routing Config…). Use them.
-- Architecture: `docs/adr/0001-shared-s1-daemon.md`.
+- Architecture: `docs/adr/*.md`.
 
 ## Python environment
 
