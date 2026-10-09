@@ -3,31 +3,20 @@
     uv run python -m s1.bench [2B|4B] [repeats]
 """
 import json
+from pathlib import Path
 import resource
 import statistics
 import sys
 import time
 
+import yaml
+
 T0 = time.perf_counter()
 from s1.runtime import load  # noqa: E402  (the import is part of the cold load)
 
-YN = "yesno"
-QUESTIONS = [
-    {"id": "M1", "type": "choice", "text": "What kind of work does this subagent task ask for?", "options": [
-        {"id": "locate", "description": "find where something is: files, symbols, config, docs"},
-        {"id": "mechanical_edit", "description": "a mechanical, well-specified code change"},
-        {"id": "investigate", "description": "investigate a bug or behaviour and explain the cause"},
-        {"id": "design", "description": "design or implement a new feature, module or architecture"},
-        {"id": "synthesize", "description": "summarise or synthesise information into a report"}]},
-    {"id": "M2", "type": YN, "text": "Does completing this task require understanding interactions across multiple files, components, or systems?"},
-    {"id": "M3", "type": YN, "text": "Would a subtle mistake in the result be costly?"},
-    {"id": "E1", "type": "score", "text": "How much must the agent decide or discover about the approach, even when the desired result is clearly stated?", "options": [
-        {"id": "clear", "description": "fully specified, one obvious way to do it"},
-        {"id": "partly_open", "description": "some choices are left to the agent"},
-        {"id": "very_open", "description": "open-ended, the agent must make many decisions"}]},
-    {"id": "E2", "type": YN, "text": "Is this a long, multi-step task?"},
-    {"id": "E3", "type": YN, "text": "Does the task explicitly require testing, validation, measurements, or exact analysis beyond a simple lookup, typo fix, or short summary?"},
-]
+QUESTIONS = [{"id": qid, **question} for qid, question in yaml.safe_load(
+    (Path(__file__).resolve().parents[1] / "hooks/default-config.yaml").read_text()
+)["questions"].items()]
 
 PROMPT = """Implement ticket 02 of the s1-auto-router spec. The repository is a Claude Code plugin that routes the Model and \
 Effort of every Agent spawn using a local System One model. Read the ticket, the spec and the ADR, then build the Python \
