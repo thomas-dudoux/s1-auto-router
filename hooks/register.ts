@@ -1,6 +1,8 @@
 import type { Engine, Register } from 'claude-code'
 import { definitionOf, definitionPaths, type AgentDefinition } from './agent-definition.ts'
 import { DEFAULT_CONFIG } from './default-config.ts'
+import { parseConfig } from './config.ts'
+import type { RoutingConfig } from './tree.ts'
 import { BUDGET_MS, URL, parseResponse, requestBody, socketPath } from './s1-client.ts'
 import { buildState } from './state.ts'
 import { questionsOf, walk, type Question } from './tree.ts'
@@ -47,22 +49,26 @@ export const register: Register = (on) => {
 }
 
 /** The Routing flow for one Spawn: what to change on the Agent call, or undefined to leave it as written. */
-async function route($: Engine, e: any): Promise<{ model?: string } | undefined> {
+async function route($: Engine, e: any): Promise<{ model?: string; effort?: string } | undefined> {
   const type = e.subagent_type ?? 'general-purpose'
-  if (type === 'fork' || e.model !== undefined) return undefined
+  if (type === 'fork' || (e.model !== undefined && e.effort !== undefined)) return undefined
   const def = await agentDefinition($, type)
-  if (!def.found || def.frontmatter.model !== undefined) return undefined
+  if (!def.found) return undefined
 
+  const config = await routingConfig($)
+  const outputs = (['model', 'effort'] as const).filter(output =>
+    e[output] === undefined && def.frontmatter[output] === undefined && config.trees[output] !== undefined)
+  if (!outputs.length) return undefined
   if (!await daemonReady($)) return undefined
-
-  const config = DEFAULT_CONFIG
-  const tree = config.trees.model!
-  const questions = Object.fromEntries(questionsOf(tree).map(id => [id, config.questions[id]]))
+  const ids: string[] = []
+  for (const output of outputs) questionsOf(config.trees[output]!, ids)
+  const questions = Object.fromEntries(ids.map(id => [id, config.questions[id]]))
   const state = buildState(e, def, offered.get(type), config.prompt_max_chars)
   const { answers } = await askS1($, state, questions)
-  const { value: model } = walk(tree, answers)
-  $.ui.toast(`S1 → ${model}`)
-  return { model }
+  const patch: { model?: string; effort?: string } = {}
+  for (const output of outputs) patch[output] = walk(config.trees[output]!, answers).value
+  $.ui.toast(`S1 → ${patch.model ?? e.model ?? def.frontmatter.model} · ${patch.effort ?? e.effort ?? def.frontmatter.effort}`)
+  return patch
 }
 
 async function agentDefinition($: Engine, type: string): Promise<AgentDefinition> {
@@ -109,4 +115,31 @@ async function daemonReady($: Engine): Promise<boolean> {
     return false
   }
   return true
+}
+
+/** First config found wins whole; never merge trees or questions across lookup levels. */
+async function routingConfig($: Engine): Promise<RoutingConfig> {
+  try {
+    const explicit = await $.env.get('S1_ROUTER_CONFIG')
+    if (explicit) {
+      const text = await readOrUndefined($, explicit)
+      if (text === undefined) throw new Error(`Cannot read ${explicit}`)
+      return parseConfig(text)
+    }
+    const home = await $.env.get('HOME')
+    for (const directory of [await $.session.root(), home]) {
+      const found: { path: string; text: string }[] = []
+      for (const extension of ['yaml', 'yml', 'json']) {
+        const path = `${directory}/.claude/s1-auto-router.${extension}`
+        const text = await readOrUndefined($, path)
+        if (text !== undefined) found.push({ path, text })
+      }
+      if (found.length > 1) $.ui.toast(`S1 Routing Config: several formats found; using ${found[0].path}`)
+      if (found.length) return parseConfig(found[0].text)
+    }
+    return DEFAULT_CONFIG
+  } catch (err) {
+    $.ui.toast(`S1 Routing Config invalid: ${err instanceof Error ? err.message : String(err)}`)
+    throw err
+  }
 }
