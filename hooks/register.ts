@@ -64,15 +64,20 @@ export const register: Register = (on) => {
       parent: { model: parents.get(e.agentId ?? 'main')?.model ?? null, effort: parents.get(e.agentId ?? 'main')?.effort ?? null }, ceiling: 'parent', raw: {}, applied: {}, reasons: {}, latency_ms: null, s1_model: null,
     }
     try {
-      decision.timestamp = new Date(await $.clock.now()).toISOString()
-      decision.ceiling = await $.env.get('S1_ROUTER_CEILING') === 'none' ? 'none' : 'parent'
-      if (await $.env.get('S1_ROUTER') === 'off') decision.reasons.skip = 'disabled'
-      else patch = await Promise.race([
-        route($, e, () => expired, decision),
+      patch = await Promise.race([
+        (async () => {
+          decision.timestamp = new Date(await $.clock.now()).toISOString()
+          decision.ceiling = await $.env.get('S1_ROUTER_CEILING') === 'none' ? 'none' : 'parent'
+          if (expired) return undefined
+          const disabled = await $.env.get('S1_ROUTER') === 'off'
+          if (expired) return undefined
+          if (disabled) { decision.reasons.skip = 'disabled'; return undefined }
+          return route($, e, () => expired, decision)
+        })(),
         $.clock.sleep(BUDGET_MS).then(() => { expired = true; throw new Error(`S1 timeout over ${BUDGET_MS} ms`) }),
       ])
     } catch (err) {
-      if (decision.started_ms !== undefined) decision.latency_ms = (await $.clock.now()) - decision.started_ms
+      if (expired && decision.started_ms !== undefined) decision.latency_ms = Math.max(0, BUDGET_MS - (decision.started_ms - Date.parse(decision.timestamp)))
       decision.reasons.fail_open = err instanceof Error ? err.message : String(err)
       warning($, `s1-auto-router fail-open: ${decision.reasons.fail_open}`)
     }
@@ -185,6 +190,7 @@ async function daemonReady($: Engine, expired: () => boolean, decision: Decision
   const python = ready && await $.fs.exists(`${$.plugin.root}/.venv/bin/python`)
   if (expired()) return false
   if (!ready || !python) {
+    decision.reasons.skip = 'S1 not set up'
     if (!setupNoticeShown) {
       setupNoticeShown = true
       toast($, 'S1 not set up, run /s1-setup')
@@ -194,6 +200,7 @@ async function daemonReady($: Engine, expired: () => boolean, decision: Decision
   const socket = await $.fs.exists(socketPath(home))
   if (expired()) return false
   if (!socket) {
+    decision.reasons.skip = 'S1 cold start'
     const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', 'start'],
       { cwd: $.plugin.root, timeoutMs: 1000 })
     if (expired()) return false
@@ -236,14 +243,21 @@ function warning($: Engine, text: string) {
 
 /** The SDK has no append/chmod; use stdlib Python and stdin so prompts stay out of process arguments. */
 async function appendDecision($: Engine, decision: Decision) {
+  let expired = false
   try {
-    const home = await $.env.get('HOME')
-    if (!home) throw new Error('HOME is unavailable')
-    const { started_ms, ...entry } = decision
-    const result = await $.process.run(['python3', `${$.plugin.root}/s1/append_log.py`, `${home}/.cache/s1-auto-router/decisions.jsonl`], {
-      stdin: JSON.stringify(entry) + '\n', timeoutMs: 1000,
-    })
-    if (result.exitCode !== 0) throw new Error(result.stderr || `exit ${result.exitCode}`)
+    await Promise.race([
+      (async () => {
+        const home = await $.env.get('HOME')
+        if (expired) return
+        if (!home) throw new Error('HOME is unavailable')
+        const { started_ms, ...entry } = decision
+        const result = await $.process.run(['python3', `${$.plugin.root}/s1/append_log.py`, `${home}/.cache/s1-auto-router/decisions.jsonl`], {
+          stdin: JSON.stringify(entry) + '\n', timeoutMs: 1000,
+        })
+        if (result.exitCode !== 0) throw new Error(result.stderr || `exit ${result.exitCode}`)
+      })(),
+      $.clock.sleep(1000).then(() => { expired = true; throw new Error('decision append timed out') }),
+    ])
   } catch (err) {
     warning($, `s1-auto-router decision log failed: ${err instanceof Error ? err.message : String(err)}`)
   }
