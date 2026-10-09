@@ -1,0 +1,338 @@
+[
+  {
+    "id": "find-route",
+    "description": "Find the Agent routing hook",
+    "subagent_type": "Explore",
+    "prompt": "Find the function that intercepts Agent calls and return its file path and line number. Do not edit anything.",
+    "expected": {
+      "model": "haiku",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "locate",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "find-env",
+    "description": "Locate the kill switch",
+    "subagent_type": "Explore",
+    "prompt": "Search for S1_ROUTER and list the files that read it, including one short usage example.",
+    "expected": {
+      "model": "haiku",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "locate",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "find-test",
+    "description": "Find the daemon contract tests",
+    "subagent_type": "Explore",
+    "prompt": "Locate the tests for unsupported request versions. Return the test names and paths.",
+    "expected": {
+      "model": "haiku",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "locate",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "trace-owners",
+    "description": "Trace config ownership across services",
+    "subagent_type": "Explore",
+    "prompt": "Map how a routing setting flows from user config through the hook, transport, and daemon. Identify which layer owns each default and explain conflicting defaults.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "locate",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "locate-security",
+    "description": "Find prompt exposure paths",
+    "subagent_type": "Explore",
+    "prompt": "Find every place full Spawn prompts can be written to disk or sent over a transport. Explain the permission checks and call graph across all layers.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "locate",
+      "openness": "very_open"
+    }
+  },
+  {
+    "id": "typo",
+    "description": "Fix a specified documentation typo",
+    "subagent_type": "general-purpose",
+    "prompt": "In CLAUDE.md replace the word probablities with probabilities. Change nothing else.",
+    "expected": {
+      "model": "haiku",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "mechanical_edit",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "rename-label",
+    "description": "Replace a fixed UI label",
+    "subagent_type": "general-purpose",
+    "prompt": "Change the toast text S1 unavailable to S1 not ready in hooks/register.ts. Verify the affected toast test still passes.",
+    "expected": {
+      "model": "haiku",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "mechanical_edit",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "fixture-update",
+    "description": "Update a specified JSON fixture",
+    "subagent_type": "general-purpose",
+    "prompt": "Set prompt_max_chars to 2000 in the example JSON config and update the test literal that asserts it. Run the affected test.",
+    "expected": {
+      "model": "haiku",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "mechanical_edit",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "permission-fix",
+    "description": "Apply a precise log permission fix",
+    "subagent_type": "general-purpose",
+    "prompt": "Ensure the existing decisions.jsonl file is chmod 0600 before appending, and update its hook test. Preserve failure handling so no Spawn is blocked by a log failure.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "mechanical_edit",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "schema-rename",
+    "description": "Rename a shared contract field",
+    "subagent_type": "general-purpose",
+    "prompt": "Rename task_type to subagent_type across the hook, Python request validator, client, fixtures, and docs. Preserve compatibility for old clients by accepting both names during migration. Run contract and routing tests.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "mechanical_edit",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "bad-version",
+    "description": "Diagnose an unsupported request version",
+    "subagent_type": "Explore",
+    "prompt": "Explain why a request with version 9 gets rejected. Read the request validator and related test, and report the exact guard without changing code.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "investigate",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "timeout",
+    "description": "Investigate intermittent cold-start timeouts",
+    "subagent_type": "general-purpose",
+    "prompt": "Spawns sometimes miss the five-second budget only after the daemon has been idle. Diagnose the cause across startup, socket creation, model load, and client retries, propose the smallest fix, and validate it.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "investigate",
+      "openness": "very_open"
+    }
+  },
+  {
+    "id": "score-drift",
+    "description": "Diagnose uncertain effort decisions",
+    "subagent_type": "Explore",
+    "prompt": "Investigate why partly_open probabilities produce medium in one config but low in another. Check probability weighting and thresholds; use worked examples to identify the cause.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "investigate",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "race",
+    "description": "Diagnose two concurrent daemon startups",
+    "subagent_type": "general-purpose",
+    "prompt": "Two Claude sessions sometimes load the local model twice and unlink each other\u2019s socket. Reproduce the startup race, identify its root cause, and fix it without breaking stale-socket recovery. Add a regression check.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "investigate",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "oom",
+    "description": "Investigate a model memory regression",
+    "subagent_type": "general-purpose",
+    "prompt": "Find why running six independent questions now uses twice the memory on an M4. Examine prefix cache sharing, row batching, model projection, and the Python runtime. Measure before and after a correction.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "investigate",
+      "openness": "very_open"
+    }
+  },
+  {
+    "id": "value-config",
+    "description": "Design a small fixed config example",
+    "subagent_type": "general-purpose",
+    "prompt": "Add a minimal YAML Routing Config with no questions and constant model sonnet and effort low. Use the existing config schema and show how users select the file.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "design",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "new-question",
+    "description": "Add a custom question example",
+    "subagent_type": "general-purpose",
+    "prompt": "Create an example config that asks whether the task touches user data, chooses sonnet or opus accordingly, and uses medium effort. Pick clear question wording and validate the example.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "design",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "schema-design",
+    "description": "Design a backwards-compatible request v2",
+    "subagent_type": "general-purpose",
+    "prompt": "Design and implement a backwards-compatible request protocol v2 shared by the TypeScript hook and long-lived Python daemon. Support rolling upgrades, negotiate versions, preserve fail-open behavior, and cover both directions of version mismatch.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "design",
+      "openness": "very_open"
+    }
+  },
+  {
+    "id": "log-security",
+    "description": "Design secure decision logging",
+    "subagent_type": "general-purpose",
+    "prompt": "Implement decision logging containing user prompts. Choose safe file permissions, preserve them on existing files, handle concurrent sessions, and prevent any logging error from changing Spawn behavior. Validate the critical paths.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "design",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "default-tuning",
+    "description": "Design and measure a default tuning strategy",
+    "subagent_type": "general-purpose",
+    "prompt": "Improve default Routing Question wording and thresholds using a labeled eval set. Decide which errors cost most, measure disagreements and latency, and justify each final default with observed results.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "design",
+      "openness": "very_open"
+    }
+  },
+  {
+    "id": "summary",
+    "description": "Summarize one short ADR",
+    "subagent_type": "Explore",
+    "prompt": "Read docs/adr/0001-shared-s1-daemon.md and summarize its decision and consequences in five bullets. Do not make recommendations.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "low"
+    },
+    "coverage": {
+      "kind": "synthesize",
+      "openness": "clear"
+    }
+  },
+  {
+    "id": "changelog",
+    "description": "Summarize recent implementation changes",
+    "subagent_type": "Explore",
+    "prompt": "Read the last five commits and write a concise user-facing changelog. Group related changes and mention the checks recorded in their messages.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "synthesize",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "compare-runtimes",
+    "description": "Synthesize a runtime comparison",
+    "subagent_type": "Explore",
+    "prompt": "Compare decider-ai and mlx-lm for the local model using the spike notes and measured benchmarks. Explain loading support, latency, memory, and the reason for the selected runtime.",
+    "expected": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "coverage": {
+      "kind": "synthesize",
+      "openness": "partly_open"
+    }
+  },
+  {
+    "id": "audit-report",
+    "description": "Synthesize a privacy and reliability audit",
+    "subagent_type": "Explore",
+    "prompt": "Audit the end-to-end routing pipeline and produce a report covering prompt exposure, permissions, fail-open behavior, concurrency, and restart compatibility. Verify every claim against the implementation and rank concrete risks.",
+    "expected": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "coverage": {
+      "kind": "synthesize",
+      "openness": "very_open"
+    }
+  }
+]

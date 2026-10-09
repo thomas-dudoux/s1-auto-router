@@ -16,17 +16,17 @@ export const DEFAULT_CONFIG: RoutingConfig = {
         { id: 'synthesize', description: 'summarise or synthesise information into a report' },
       ],
     },
-    M2: { type: 'yesno', text: 'Does the task need reasoning across many files or systems?' },
+    M2: { type: 'yesno', text: 'Does completing this task require understanding interactions across multiple files, components, or systems?' },
     M3: { type: 'yesno', text: 'Would a subtle mistake in the result be costly?' },
     E1: {
-      type: 'score', text: 'How open are the instructions for this subagent task?', options: [
+      type: 'score', text: 'How much must the agent decide or discover about the approach, even when the desired result is clearly stated?', options: [
         { id: 'clear', description: 'clear, fully specified instructions with little to decide' },
         { id: 'partly_open', description: 'partly open instructions requiring some judgment' },
         { id: 'very_open', description: 'very open instructions requiring substantial exploration or design' },
       ],
     },
     E2: { type: 'yesno', text: 'Is this a long multi-step task?' },
-    E3: { type: 'yesno', text: 'Must the result be verified or exact?' },
+    E3: { type: 'yesno', text: 'Does the task explicitly require testing, validation, measurements, or exact analysis beyond a simple lookup, typo fix, or short summary?' },
   },
   trees: {
     model: {
