@@ -18,6 +18,15 @@ export const DEFAULT_CONFIG: RoutingConfig = {
     },
     M2: { type: 'yesno', text: 'Does the task need reasoning across many files or systems?' },
     M3: { type: 'yesno', text: 'Would a subtle mistake in the result be costly?' },
+    E1: {
+      type: 'score', text: 'How open are the instructions for this subagent task?', options: [
+        { id: 'clear', description: 'clear, fully specified instructions with little to decide' },
+        { id: 'partly_open', description: 'partly open instructions requiring some judgment' },
+        { id: 'very_open', description: 'very open instructions requiring substantial exploration or design' },
+      ],
+    },
+    E2: { type: 'yesno', text: 'Is this a long multi-step task?' },
+    E3: { type: 'yesno', text: 'Must the result be verified or exact?' },
   },
   trees: {
     model: {
@@ -30,6 +39,14 @@ export const DEFAULT_CONFIG: RoutingConfig = {
         synthesize: stronger('opus', 'sonnet'),
       },
       default: 'sonnet',
+    },
+    effort: {
+      score: [
+        { q: 'E1', weights: { clear: 0, partly_open: 1, very_open: 2 } },
+        { q: 'E2', weight: 1 },
+        { q: 'E3', weight: 1 },
+      ],
+      thresholds: { low: 0, medium: 1, high: 2.5 },
     },
   },
 }
