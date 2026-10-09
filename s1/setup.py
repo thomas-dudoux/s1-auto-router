@@ -8,7 +8,7 @@ import sys
 import time
 
 from s1.client import post
-from s1.daemon import SOCKET
+from s1.daemon import SOCKET, daemon_lock
 
 CACHE = Path(SOCKET).parent
 READY = CACHE / "ready.json"
@@ -38,8 +38,14 @@ def start():
 def stop():
     """Ask the shared daemon to stop; never kill an unverified PID from a stale file."""
     if not health():
-        if Path(SOCKET).exists():
-            raise RuntimeError("S1 socket does not answer health; stop the old daemon manually, then retry")
+        try:
+            lock = daemon_lock(SOCKET)
+        except BlockingIOError as error:
+            raise RuntimeError("S1 is starting or an older daemon is running; wait for startup or stop the old daemon manually, then retry") from error
+        try:
+            Path(SOCKET).unlink(missing_ok=True)
+        finally:
+            lock.close()
         return
     status, body = post(SOCKET, "/v1/shutdown", {}, timeout=30)
     if status != 200:
