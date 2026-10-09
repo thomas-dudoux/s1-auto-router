@@ -5,22 +5,24 @@ const HOME = '/home/u'
 const ROOT = '/proj'
 const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
-type S1 = { answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean }
+type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean }
 
 function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}) {
-  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on) }
+  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
   mock.env(on, { HOME, ...env })
   on('session.root', () => ({ value: ROOT }))
+  on('session.id', () => ({ value: w.session }))
+  on('process.run', ($: any, e: any) => { w.processes.push(e); if (s1.logFailure) return { deny: 'disk full' }; return { value: { exitCode: 0, stdout: '', stderr: '' } } })
   on('fs.read', ($: any, e: any) => (e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }))
   on('ui.log', ($: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
-  on('ui.toast', ($: any, e: any) => { w.toasts.push(e.text); return { value: undefined } })
+  on('ui.toast', ($: any, e: any) => { w.toasts.push(e.text); if (s1.toastFailure) return { deny: 'toast unavailable' }; return { value: undefined } })
   on('http.fetch', async ($: any, e: any) => {
     w.requests.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(e.init.body) })
     if (s1.refuse) return { deny: 'ECONNREFUSED' }
     if (s1.hang) await new Promise(() => {})
     const answers = Object.fromEntries(Object.entries(s1.answers ?? {}).map(([id, probs]) =>
       [id, { probs, confidence: Math.max(...Object.values(probs)) }]))
-    const text = s1.text ?? JSON.stringify({ version: 1, model: 'decider-2b-v11', answers })
+    const text = s1.text ?? JSON.stringify({ version: 1, model: s1.model ?? 'decider-2b-v11', answers })
     const status = s1.status ?? 200
     return { value: { status, ok: status < 300, headers: {}, text } }
   })
@@ -222,7 +224,7 @@ test('the env Routing Config wins whole over project and user files', async ($, 
   }, { S1_ROUTER_CONFIG: '/shared/routing.json' })
   await $.tool.call(call({ effort: undefined }))
   expect(w.spawned.model).toBe('opus')
-  expect(w.requests[0].body.questions).toEqual([])
+  expect(w.requests).toHaveLength(0)
 })
 
 test('an invalid Routing Config toasts and fails open before asking S1', async ($, on) => {
@@ -322,7 +324,7 @@ for (const [name, config] of configErrors) {
 
 for (const [limit, expected] of [[3, 'abc'], [0, 'abcdefgh']] as const) {
   test(`prompt_max_chars ${limit} is respected in the state sent to S1`, async ($, on) => {
-    const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium', { prompt_max_chars: limit }) })
+    const w = world(on, { answers: { costly: yes } }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig({ if: 'costly', then: 'sonnet', else: 'haiku' }, 'medium', { prompt_max_chars: limit, questions: { costly: { type: 'yesno', text: 'Costly?' } } }) })
     await $.tool.call(call({ effort: undefined, prompt: 'abcdefgh' }))
     expect(w.spawned.model).toBe('sonnet')
     expect(w.requests[0].body.state.prompt).toBe(expected)
@@ -335,4 +337,95 @@ test('a missing env config fails open without using a lower-precedence file', as
   expect(w.spawned.model).toBeUndefined(); expect(w.spawned.effort).toBeUndefined()
   expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:'))).toBe(true)
   expect(w.requests).toHaveLength(0)
+})
+
+test('S1_ROUTER=off leaves the Spawn unchanged without asking S1 or showing a toast', async ($, on) => {
+  const w = world(on, { answers: { M1: kind('design'), M2: yes, M3: yes } }, {}, { S1_ROUTER: 'off' })
+  await $.tool.call(call())
+  expect(w.spawned).toMatchObject(call()); expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.toasts).toEqual([])
+})
+
+
+test('each routed Spawn appends a JSONL decision with the full Routing context', async ($, on) => {
+  const w = world(on, { answers: { M1: kind('locate'), M2: no, M3: no } })
+  await $.tool.call(call())
+  const writes = w.processes.filter(p => p.argv.some((arg: string) => arg.endsWith('/s1/append_log.py')))
+  expect(writes).toHaveLength(1)
+  expect(writes[0].argv.at(-1)).toBe(`${HOME}/.cache/s1-auto-router/decisions.jsonl`)
+  expect(writes[0].init.stdin.endsWith('\n')).toBe(true)
+  const entry = JSON.parse(writes[0].init.stdin)
+  expect(entry).toMatchObject({
+    state: { description: 'list files', prompt: 'List the files in src/', subagent_type: 'Explore' },
+    explicit: { model: null, effort: 'high' }, parent: { model: null, effort: null }, ceiling: 'parent',
+    probabilities: { M1: { probs: kind('locate') } }, raw: { model: 'haiku' }, applied: { model: 'haiku' },
+    reasons: {}, latency_ms: 0,
+  })
+  expect(typeof entry.timestamp).toBe('string')
+  expect(entry.questions.map((q: any) => q.id)).toEqual(['M1', 'M2', 'M3'])
+})
+
+
+test('a different loaded Decider is used, toasted once per session and recorded in every decision', async ($, on) => {
+  const w = world(on, { model: 'decider-4b-v11', answers: { M1: kind('locate'), M2: no, M3: no } })
+  await $.tool.call(call())
+  await $.tool.call(call())
+  expect(w.spawned.model).toBe('haiku')
+  expect(w.toasts.filter(t => t.includes('Decider mismatch'))).toHaveLength(1)
+  const entries = w.processes.map(p => JSON.parse(p.init.stdin))
+  expect(entries).toHaveLength(2)
+  for (const entry of entries) expect(entry.s1_model).toEqual({ expected: 'decider-2b-v11', loaded: 'decider-4b-v11', mismatch: true })
+})
+
+
+for (const [name, s1, extra] of [
+  ['S1 refusal', { refuse: true }, {}],
+  ['fork', {}, { subagent_type: 'fork' }],
+  ['both Explicit values', {}, { model: 'opus', effort: 'max' }],
+] as [string, S1, object][]) {
+  test(`a decision line records ${name} even when no value is applied`, async ($, on) => {
+    const w = world(on, s1)
+    await $.tool.call(call(extra))
+    expect(w.processes).toHaveLength(1)
+    const entry = JSON.parse(w.processes[0].init.stdin)
+    expect(entry.state.prompt).toBe('List the files in src/')
+    expect(entry.applied).toEqual({})
+    expect(Object.keys(entry.reasons).length).toBe(1)
+  })
+}
+
+for (const failure of ['logFailure', 'toastFailure'] as const) {
+  test(`${failure} does not stop the Spawn or discard its Routing result`, async ($, on) => {
+    const w = world(on, { [failure]: true, answers: { M1: kind('locate'), M2: no, M3: no } })
+    await $.tool.call(call())
+    expect(w.spawned.model).toBe('haiku')
+    if (failure === 'logFailure') expect(w.logs.some(l => l.includes('decision log failed'))).toBe(true)
+  })
+}
+
+test('model mismatch warning is independent for each session and matching models do not warn', async ($, on) => {
+  const w = world(on, { model: 'decider-4b-v11', answers: { M1: kind('locate'), M2: no, M3: no } })
+  await $.tool.call(call())
+  w.session = 'another-session'
+  await $.tool.call(call())
+  expect(w.toasts.filter(t => t.includes('Decider mismatch'))).toHaveLength(2)
+})
+
+test('S1_MODEL=4B matches a running 4B Decider without a mismatch warning', async ($, on) => {
+  const w = world(on, { model: 'decider-4b-v11', answers: { M1: kind('locate'), M2: no, M3: no } }, {}, { S1_MODEL: '4B' })
+  await $.tool.call(call())
+  expect(w.toasts.filter(t => t.includes('Decider mismatch'))).toHaveLength(0)
+  expect(JSON.parse(w.processes[0].init.stdin).s1_model.mismatch).toBe(false)
+})
+
+
+test('constant Model and Effort trees route without making an empty S1 request', async ($, on) => {
+  const w = world(on, { refuse: true }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium') })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(w.requests).toHaveLength(0)
+  const entry = JSON.parse(w.processes[0].init.stdin)
+  expect(entry.latency_ms).toBe(null)
+  expect(entry.s1_model).toBe(null)
 })
