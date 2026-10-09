@@ -9,8 +9,26 @@ import { questionsOf, walk, type Question } from './tree.ts'
 
 // Agent descriptions as offered to the model (agent.offer), for the state of built-in agents.
 const offered = new Map<string, string>()
+let setupNoticeShown = false
 
 export const register: Register = (on) => {
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    await $.command.register({ name: 's1-setup', description: 'Prepare S1 and run a smoke request', argumentHint: '[--restart]' })
+    return result
+  })
+
+  on('command.run', { command: 's1-setup' }, async ($, e) => {
+    if (e.args.trim() !== '' && e.args.trim() !== '--restart') return { text: 'Usage: /s1-setup [--restart]', exitCode: 1 }
+    const model = await $.env.get('S1_MODEL') ?? '2B'
+    if (model !== '2B' && model !== '4B') return { text: 'S1_MODEL must be 2B or 4B', exitCode: 1 }
+    const sync = await $.process.run(['uv', 'sync', '--project', $.plugin.root], { timeoutMs: 600_000 })
+    if (sync.exitCode !== 0) return { text: `S1 environment setup failed: ${sync.stderr}`, exitCode: sync.exitCode }
+    const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', ...(e.args.trim() ? ['--restart'] : [])],
+      { cwd: $.plugin.root, env: { S1_MODEL: model }, timeoutMs: 600_000 })
+    return { text: result.stdout || result.stderr, exitCode: result.exitCode }
+  })
+
   on('agent.offer', ($, e, next) => {
     offered.set(e.agent, e.description)
     return next(e)
@@ -34,6 +52,8 @@ async function route($: Engine, e: any): Promise<{ model?: string } | undefined>
   if (type === 'fork' || e.model !== undefined) return undefined
   const def = await agentDefinition($, type)
   if (!def.found || def.frontmatter.model !== undefined) return undefined
+
+  if (!await daemonReady($)) return undefined
 
   const config = DEFAULT_CONFIG
   const tree = config.trees.model!
@@ -70,4 +90,23 @@ async function askS1($: Engine, state: object, questions: Record<string, Questio
     $.clock.sleep(BUDGET_MS).then(() => { throw new Error(`S1 timeout over ${BUDGET_MS} ms`) }),
   ])
   return parseResponse(res, questions)
+}
+
+async function daemonReady($: Engine): Promise<boolean> {
+  const home = await $.env.get('HOME')
+  const cache = `${home}/.cache/s1-auto-router`
+  if (!await $.fs.exists(`${cache}/ready.json`) || !await $.fs.exists(`${$.plugin.root}/.venv/bin/python`)) {
+    if (!setupNoticeShown) {
+      setupNoticeShown = true
+      $.ui.toast('S1 not set up, run /s1-setup')
+    }
+    return false
+  }
+  if (!await $.fs.exists(socketPath(home))) {
+    const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', 'start'],
+      { cwd: $.plugin.root, timeoutMs: 1000 })
+    $.ui.log(`s1-auto-router cold start: ${result.exitCode === 0 ? 'starting S1' : result.stderr}`, { to: 'debug' })
+    return false
+  }
+  return true
 }
