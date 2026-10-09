@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-`s1-auto-router` is a Claude Code plugin (mod) that routes the Model and Effort of every `Agent` spawn using a local System One model (Decider 2B/4B, MLX). It has two parts: a TypeScript mod handling `agent.spawn`, and a Python S1 daemon on a unix socket. Design and decisions are settled; no source code exists yet.
+`s1-auto-router` is a Claude Code plugin (mod) that routes the Model and Effort of every `Agent` spawn using a local System One model (Decider 2B/4B, MLX). It has two parts: a TypeScript mod (a `tool.call` hook on `Agent`, in `hooks/`), and a Python S1 daemon on a unix socket (`s1/`).
+
+Mod layout: `hooks/register.ts` holds the hooks and every function that touches `$` (the validator never follows `$` across an import). The other modules are pure: `s1-client.ts` (v1 request, response validation, 5 s budget), `state.ts`, `agent-definition.ts` (Explicit values from frontmatter), `tree.ts` (Routing Config types, Decision Tree evaluator), `default-config.ts` (bundled Routing Config), `vendor/js-yaml.mjs`.
 
 - Spec: `.scratch/*/spec.md`. Tickets: `.scratch/*/issues/`, numbered in dependency order.
 - Terms: `GLOSSARY.md` (Spawn, Routing, Explicit value, Ceiling, Abstain, Routing Config…). Use them.
@@ -30,7 +32,7 @@ Commands:
 The repo root is the plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`).
 
 - `claude plugin validate .`: check the manifest and hooks module.
-- `claude plugin test .`: run the mod's `*.test.ts` tests (no real I/O: answer `fs`, `http.fetch`, `process.run` events in the test).
+- `claude plugin test .`: run the mod's `*.test.ts` tests (no real I/O: answer `fs`, `http.fetch`, `process.run` events in the test). `tests/router.test.ts` has a `world()` helper: fake S1 at `http.fetch`, fake files at `fs.read`, env, mock clock.
 - `claude -p --plugin-dir . "..." < /dev/null`: load the mod headless. Debug logs (`--debug-file`) contain settings secrets: never keep or commit them.
 
 ## Conventions
