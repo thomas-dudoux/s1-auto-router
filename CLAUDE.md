@@ -16,9 +16,12 @@ Managed by uv: Python 3.13 in `.venv/`, deps `decider-ai[metal]` and `mlx-lm` in
 
 - `uv sync`: install the dependencies.
 - `uv run hf download midium-ai/decider-2b-dwq-4bit`: download the model (~1.06 GB, into `~/.cache/huggingface`).
-- The `decider-ai` package is imported as `decider`.
+- The `decider-ai` package is imported as `decider`. It cannot load the MLX DWQ checkpoint, so `s1/runtime.py` runs the forward pass on `mlx-lm` and reuses decider's torch-free prompt helpers (`decider.prompt`, `decider.systemone`). Never import `decider.infer`, because it loads torch.
 
-There are no build, lint or test commands yet. Add them here as the tickets land.
+Commands:
+
+- `uv run python -m pytest`: run the Python tests (no model needed).
+- `uv run python -m s1.bench [2B|4B] [repeats]`: measure S1 latency and RAM on the real model (6 default questions, 4k-char state).
 
 ## Conventions
 
