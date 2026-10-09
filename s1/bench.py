@@ -19,14 +19,14 @@ QUESTIONS = [
         {"id": "investigate", "description": "investigate a bug or behaviour and explain the cause"},
         {"id": "design", "description": "design or implement a new feature, module or architecture"},
         {"id": "synthesize", "description": "summarise or synthesise information into a report"}]},
-    {"id": "M2", "type": YN, "text": "Does the task need reasoning across many files or systems?"},
+    {"id": "M2", "type": YN, "text": "Does completing this task require understanding interactions across multiple files, components, or systems?"},
     {"id": "M3", "type": YN, "text": "Would a subtle mistake in the result be costly?"},
-    {"id": "E1", "type": "score", "text": "How open are the task's instructions?", "options": [
+    {"id": "E1", "type": "score", "text": "How much must the agent decide or discover about the approach, even when the desired result is clearly stated?", "options": [
         {"id": "clear", "description": "fully specified, one obvious way to do it"},
         {"id": "partly_open", "description": "some choices are left to the agent"},
         {"id": "very_open", "description": "open-ended, the agent must make many decisions"}]},
     {"id": "E2", "type": YN, "text": "Is this a long, multi-step task?"},
-    {"id": "E3", "type": YN, "text": "Must the result be verified or exact?"},
+    {"id": "E3", "type": YN, "text": "Does the task explicitly require testing, validation, measurements, or exact analysis beyond a simple lookup, typo fix, or short summary?"},
 ]
 
 PROMPT = """Implement ticket 02 of the s1-auto-router spec. The repository is a Claude Code plugin that routes the Model and \
