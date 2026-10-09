@@ -1,6 +1,8 @@
 import type { Engine, Register } from 'claude-code'
 import { definitionOf, definitionPaths, type AgentDefinition } from './agent-definition.ts'
 import { DEFAULT_CONFIG } from './default-config.ts'
+import { parseConfig } from './config.ts'
+import type { RoutingConfig } from './tree.ts'
 import { BUDGET_MS, URL, parseResponse, requestBody, socketPath } from './s1-client.ts'
 import { buildState } from './state.ts'
 import { questionsOf, walk, type Question } from './tree.ts'
@@ -11,11 +13,31 @@ import { questionsOf, walk, type Question } from './tree.ts'
 const offered = new Map<string, string>()
 const parents = new Map<string, { model?: string; effort?: string }>()
 
+let setupNoticeShown = false
+
 export const register: Register = (on) => {
   on('turn.step', async function* ($, e, next) {
     parents.set(e.agentId ?? 'main', { model: e.model, effort: e.effort })
     return yield* next(e)
   })
+  on('session.start', async ($, e, next) => {
+    const result = await next(e)
+    await $.command.register({ name: 's1-setup', description: 'Prepare S1 and run a smoke request', argumentHint: '[--restart]' })
+    return result
+  })
+
+  on('command.run', { command: 's1-setup' }, async ($, e) => {
+    if (e.args.trim() !== '' && e.args.trim() !== '--restart') return { text: 'Usage: /s1-setup [--restart]', exitCode: 1 }
+    const model = await $.env.get('S1_MODEL') ?? '2B'
+    if (model !== '2B' && model !== '4B') return { text: 'S1_MODEL must be 2B or 4B', exitCode: 1 }
+    const sync = await $.process.run(['uv', 'sync', '--project', $.plugin.root], { timeoutMs: 600_000 })
+    if (sync.exitCode !== 0) return { text: `S1 environment setup failed: ${sync.stderr}`, exitCode: sync.exitCode }
+    const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', ...(e.args.trim() ? ['--restart'] : [])],
+      { cwd: $.plugin.root, env: { S1_MODEL: model }, timeoutMs: 600_000 })
+    return { text: result.stdout || result.stderr, exitCode: result.exitCode }
+  })
+
+
   on('agent.offer', ($, e, next) => {
     offered.set(e.agent, e.description)
     return next(e)
@@ -44,7 +66,8 @@ async function route($: Engine, e: any, expired: () => boolean): Promise<{ model
   const def = await agentDefinition($, type)
   if (!def.found || expired()) return undefined
 
-  const config = DEFAULT_CONFIG
+  const config = await routingConfig($, expired)
+  if (expired()) return undefined
   const outputs = (['model', 'effort'] as const).filter(output =>
     e[output] === undefined && def.frontmatter[output] === undefined && config.trees[output] !== undefined)
   if (!outputs.length) return undefined
@@ -53,6 +76,8 @@ async function route($: Engine, e: any, expired: () => boolean): Promise<{ model
   const ceiling = await $.env.get('S1_ROUTER_CEILING') === 'none' ? 'none' : 'parent'
   const limits = { model: parentModel?.match(/(?:^|-)(haiku|sonnet|opus|fable)(?:-|$)/)?.[1], effort: parent.effort }
   if (expired()) return undefined
+  if (!await daemonReady($, expired)) return undefined
+
   const ids: string[] = []
   for (const output of outputs) questionsOf(config.trees[output]!, ids)
   const questions = Object.fromEntries(ids.map(id => [id, config.questions[id]]))
@@ -99,4 +124,58 @@ async function askS1($: Engine, state: object, questions: Record<string, Questio
     body: requestBody(state, questions), socketPath: socketPath(home),
   })
   return parseResponse(res, questions)
+}
+
+async function daemonReady($: Engine, expired: () => boolean): Promise<boolean> {
+  const home = await $.env.get('HOME')
+  if (expired()) return false
+  const cache = `${home}/.cache/s1-auto-router`
+  const ready = await $.fs.exists(`${cache}/ready.json`)
+  if (expired()) return false
+  const python = ready && await $.fs.exists(`${$.plugin.root}/.venv/bin/python`)
+  if (expired()) return false
+  if (!ready || !python) {
+    if (!setupNoticeShown) {
+      setupNoticeShown = true
+      $.ui.toast('S1 not set up, run /s1-setup')
+    }
+    return false
+  }
+  const socket = await $.fs.exists(socketPath(home))
+  if (expired()) return false
+  if (!socket) {
+    const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', 'start'],
+      { cwd: $.plugin.root, timeoutMs: 1000 })
+    if (expired()) return false
+    $.ui.log(`s1-auto-router cold start: ${result.exitCode === 0 ? 'starting S1' : result.stderr}`, { to: 'debug' })
+    return false
+  }
+  return true
+}
+
+/** First config found wins whole; never merge trees or questions across lookup levels. */
+async function routingConfig($: Engine, expired: () => boolean): Promise<RoutingConfig> {
+  try {
+    const explicit = await $.env.get('S1_ROUTER_CONFIG')
+    if (explicit) {
+      const text = await readOrUndefined($, explicit)
+      if (text === undefined) throw new Error(`Cannot read ${explicit}`)
+      return parseConfig(text)
+    }
+    const home = await $.env.get('HOME')
+    for (const directory of [await $.session.root(), home]) {
+      const found: { path: string; text: string }[] = []
+      for (const extension of ['yaml', 'yml', 'json']) {
+        const path = `${directory}/.claude/s1-auto-router.${extension}`
+        const text = await readOrUndefined($, path)
+        if (text !== undefined) found.push({ path, text })
+      }
+      if (!expired() && found.length > 1) $.ui.toast(`S1 Routing Config: several formats found; using ${found[0].path}`)
+      if (found.length) return parseConfig(found[0].text)
+    }
+    return DEFAULT_CONFIG
+  } catch (err) {
+    if (!expired()) $.ui.toast(`S1 Routing Config invalid: ${err instanceof Error ? err.message : String(err)}`)
+    throw err
+  }
 }

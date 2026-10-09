@@ -1,0 +1,80 @@
+# Copy to .claude/s1-auto-router.yaml (project) or ~/.claude/s1-auto-router.yaml (user),
+# or point S1_ROUTER_CONFIG at this file. The first config found is used whole.
+# Duplicate formats at one level warn; the order is yaml, yml, json.
+
+# Abstain on an output when an answer on its path has confidence below this.
+threshold: 0.6
+# Characters of the Spawn prompt sent to S1. Set 0 for no limit.
+prompt_max_chars: 4000
+
+questions:
+  M1:
+    type: choice
+    text: What kind of work does this subagent task ask for?
+    options:
+      - id: locate
+        description: 'find where something is: files, symbols, config, docs'
+      - id: mechanical_edit
+        description: a mechanical, well-specified code change
+      - id: investigate
+        description: investigate a bug or behaviour and explain the cause
+      - id: design
+        description: design or implement a new feature, module or architecture
+      - id: synthesize
+        description: summarise or synthesise information into a report
+  M2:
+    type: yesno
+    text: Does the task need reasoning across many files or systems?
+  M3:
+    type: yesno
+    text: Would a subtle mistake in the result be costly?
+  E1:
+    type: score
+    text: How open are the instructions for this subagent task?
+    options:
+      - id: clear
+        description: clear, fully specified instructions with little to decide
+      - id: partly_open
+        description: partly open instructions requiring some judgment
+      - id: very_open
+        description: very open instructions requiring substantial exploration or design
+  E2:
+    type: yesno
+    text: Is this a long multi-step task?
+  E3:
+    type: yesno
+    text: Must the result be verified or exact?
+
+trees:
+  # Strings are value nodes; if requires a yesno question.
+  # switch works with choice/score questions and always needs default.
+  model:
+    switch: M1
+    cases:
+      locate: {if: M2, then: sonnet, else: haiku}
+      mechanical_edit:
+        if: M2
+        then: sonnet
+        else: {if: M3, then: sonnet, else: haiku}
+      investigate:
+        if: M2
+        then: opus
+        else: {if: M3, then: opus, else: sonnet}
+      design:
+        if: M2
+        then: opus
+        else: {if: M3, then: opus, else: sonnet}
+      synthesize:
+        if: M2
+        then: opus
+        else: {if: M3, then: opus, else: sonnet}
+    default: sonnet
+  # A score term adds expected weight: probability times each option's weight.
+  # yesno uses P(yes) times weight. Highest threshold reached wins.
+  effort:
+    score:
+      - q: E1
+        weights: {clear: 0, partly_open: 1, very_open: 2}
+      - {q: E2, weight: 1}
+      - {q: E3, weight: 1}
+    thresholds: {low: 0, medium: 1, high: 2.5}

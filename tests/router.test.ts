@@ -5,10 +5,10 @@ const HOME = '/home/u'
 const ROOT = '/proj'
 const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
-type S1 = { answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean }
+type S1 = { answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; notReady?: boolean; noSocket?: boolean }
 
 function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void> } = {}) {
-  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on) }
+  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[] }
   mock.env(on, { HOME, ...env })
   on('session.root', () => ({ value: ROOT }))
   on('session.model', () => ({ value: setup.parentModel }))
@@ -17,6 +17,9 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
     if (setup.readBlock) await setup.readBlock
     return e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }
   })
+  on('fs.exists', ($: any, e: any) => ({ value: e.path.endsWith('ready.json') ? !s1.notReady : e.path.endsWith('s1.sock') ? !s1.noSocket : true }))
+  on('process.run', ($: any, e: any) => { w.processes.push(e); return { value: { exitCode: 0, stdout: '', stderr: '' } } })
+
   on('ui.log', ($: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
   on('ui.toast', ($: any, e: any) => { w.toasts.push(e.text); return { value: undefined } })
   on('http.fetch', async ($: any, e: any) => {
@@ -347,4 +350,156 @@ test('the total 5 s budget includes definition reads, with no late request or to
   expect(w.requests).toHaveLength(0)
   expect(w.toasts).toEqual([])
   expect(w.logs.some(l => l.includes('timeout'))).toBe(true)
+})
+
+test('before setup every Spawn fails open and the setup notice appears once', async ($, on) => {
+  const w = world(on, { notReady: true })
+  await $.tool.call(call())
+  await $.tool.call(call())
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.processes).toHaveLength(0)
+  expect(w.toasts).toEqual(['S1 not set up, run /s1-setup'])
+})
+
+
+test('a Spawn with no socket starts S1 and fails open, then later Spawns route', async ($, on) => {
+  const s1 = { noSocket: true, answers: { M1: kind('locate'), M2: no, M3: no } }
+  const w = world(on, s1)
+  await $.tool.call(call())
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.processes).toHaveLength(1)
+  expect(w.processes[0].argv.slice(1)).toEqual(['-m', 's1.setup', 'start'])
+  s1.noSocket = false
+  await $.tool.call(call())
+  expect(w.spawned.model).toBe('haiku')
+})
+
+const customConfig = (model: unknown = 'sonnet', effort: unknown = 'medium', extra: object = {}) => JSON.stringify({
+  questions: {}, trees: { model, effort }, ...extra,
+})
+
+test('the env Routing Config wins whole over project and user files', async ($, on) => {
+  const w = world(on, {}, {
+    '/shared/routing.json': customConfig('opus'),
+    [`${ROOT}/.claude/s1-auto-router.yaml`]: customConfig('haiku'),
+    [`${HOME}/.claude/s1-auto-router.json`]: customConfig('sonnet'),
+  }, { S1_ROUTER_CONFIG: '/shared/routing.json' })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned.model).toBe('opus')
+  expect(w.requests[0].body.questions).toEqual([])
+})
+
+test('an invalid Routing Config toasts and fails open before asking S1', async ($, on) => {
+  const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig({ switch: 'missing', cases: {} }) })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject(call({ effort: undefined }))
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.spawned.effort).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:'))).toBe(true)
+})
+
+test('a custom probability-weighted score tree is accepted alongside a value Model tree', async ($, on) => {
+  const w = world(on, { answers: { open: { clear: 0.2, broad: 0.8 }, exact: yes } }, {
+    [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', {
+      score: [{ q: 'open', weights: { clear: 0, broad: 2 } }, { q: 'exact', weight: 1 }],
+      thresholds: { low: 0, medium: 1, high: 2.5 },
+    }, { questions: {
+      open: { type: 'score', text: 'How open is this task?', options: [{ id: 'clear', description: 'fully specified' }, { id: 'broad', description: 'open design' }] },
+      exact: { type: 'yesno', text: 'Must the result be exact?' },
+    } }),
+  })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned.model).toBe('sonnet')
+  expect(w.spawned.effort).toBe('high')
+})
+
+const yamlCustom = `# A user question can drive either Decision Tree.
+questions:
+  costly:
+    type: yesno
+    text: Would a mistake be costly?
+trees:
+  model:
+    if: costly
+    then: opus
+    else: haiku
+  effort: medium
+`
+
+for (const [name, files, model] of [
+  ['project precedes user', { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('haiku'), [`${HOME}/.claude/s1-auto-router.yaml`]: customConfig('opus') }, 'haiku'],
+  ['user precedes bundled', { [`${HOME}/.claude/s1-auto-router.json`]: customConfig('sonnet') }, 'sonnet'],
+  ['YAML custom yes/no', { [`${ROOT}/.claude/s1-auto-router.yaml`]: yamlCustom }, 'opus'],
+  ['yml is supported', { [`${ROOT}/.claude/s1-auto-router.yml`]: yamlCustom }, 'opus'],
+] as [string, Record<string, string>, string][]) {
+  test(`Routing Config lookup: ${name}`, async ($, on) => {
+    const w = world(on, { answers: { costly: yes } }, files)
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned.model).toBe(model)
+  })
+}
+
+test('duplicate formats warn and yaml wins over yml and json at the same level', async ($, on) => {
+  const w = world(on, { answers: { costly: yes } }, {
+    [`${ROOT}/.claude/s1-auto-router.yaml`]: yamlCustom,
+    [`${ROOT}/.claude/s1-auto-router.yml`]: customConfig('haiku'),
+    [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet'),
+  })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned.model).toBe('opus')
+  expect(w.toasts.some(t => t.includes('several formats') && t.includes('s1-auto-router.yaml'))).toBe(true)
+})
+
+const choiceQuestion = { type: 'choice', text: 'Which work?', options: [{ id: 'small', description: 'small work' }, { id: 'large', description: 'large work' }] }
+const configErrors: [string, string][] = [
+  ['unknown question', customConfig({ if: 'missing', then: 'haiku', else: 'sonnet' })],
+  ['wrong if question type', customConfig({ if: 'work', then: 'haiku', else: 'sonnet' }, 'medium', { questions: { work: choiceQuestion } })],
+  ['wrong switch question type', customConfig({ switch: 'work', cases: {}, default: 'sonnet' }, 'medium', { questions: { work: { type: 'yesno', text: 'Is it work?' } } })],
+  ['unknown option', customConfig({ switch: 'work', cases: { missing: 'haiku' }, default: 'sonnet' }, 'medium', { questions: { work: choiceQuestion } })],
+  ['invalid Model value', customConfig('fable')],
+  ['invalid Effort value', customConfig('sonnet', 'max')],
+  ['invalid threshold key', customConfig('sonnet', { score: [{ q: 'work', weights: { small: 0, large: 1 } }], thresholds: { max: 0 } }, { questions: { work: choiceQuestion } })],
+  ['missing default', customConfig({ switch: 'work', cases: { small: 'haiku' } }, 'medium', { questions: { work: choiceQuestion } })],
+  ['missing effort tree', JSON.stringify({ questions: {}, trees: { model: 'haiku' } })],
+  ['malformed YAML', 'trees: ['],
+  ['ambiguous node', customConfig({ if: 'costly', then: 'haiku', else: 'sonnet', switch: 'work', cases: {}, default: 'sonnet' }, 'medium', { questions: { costly: { type: 'yesno', text: 'Costly?' }, work: choiceQuestion } })],
+  ['too many options', customConfig('sonnet', 'medium', { questions: { work: { ...choiceQuestion, options: Array.from({ length: 11 }, (_, i) => ({ id: `o${i}`, description: `option ${i}` })) } } })],
+  ['null confidence threshold', customConfig('sonnet', 'medium', { threshold: null })],
+  ['invalid confidence threshold', customConfig('sonnet', 'medium', { threshold: 2 })],
+  ['negative prompt limit', customConfig('sonnet', 'medium', { prompt_max_chars: -1 })],
+  ['invalid score weight', customConfig('sonnet', { score: [{ q: 'work', weights: { small: 'high' } }], thresholds: { low: 0 } }, { questions: { work: choiceQuestion } })],
+  ['unknown score option', customConfig('sonnet', { score: [{ q: 'work', weights: { missing: 1 } }], thresholds: { low: 0 } }, { questions: { work: choiceQuestion } })],
+  ['unknown score question', customConfig('sonnet', { score: [{ q: 'missing', weight: 1 }], thresholds: { low: 0 } })],
+  ['missing option description', customConfig('sonnet', 'medium', { questions: { work: { ...choiceQuestion, options: [{ id: 'small' }, { id: 'large', description: 'large' }] } } })],
+]
+for (const [name, config] of configErrors) {
+  test(`invalid Routing Config: ${name} toasts and leaves the Spawn unchanged`, async ($, on) => {
+    const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: config, [`${HOME}/.claude/s1-auto-router.yaml`]: customConfig('opus') })
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned).toMatchObject(call({ effort: undefined }))
+    expect(w.spawned.model).toBeUndefined(); expect(w.spawned.effort).toBeUndefined()
+    expect(w.requests).toHaveLength(0)
+    expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:'))).toBe(true)
+  })
+}
+
+for (const [limit, expected] of [[3, 'abc'], [0, 'abcdefgh']] as const) {
+  test(`prompt_max_chars ${limit} is respected in the state sent to S1`, async ($, on) => {
+    const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium', { prompt_max_chars: limit }) })
+    await $.tool.call(call({ effort: undefined, prompt: 'abcdefgh' }))
+    expect(w.spawned.model).toBe('sonnet')
+    expect(w.requests[0].body.state.prompt).toBe(expected)
+  })
+}
+
+test('a missing env config fails open without using a lower-precedence file', async ($, on) => {
+  const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('opus') }, { S1_ROUTER_CONFIG: '/missing.yaml' })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned.model).toBeUndefined(); expect(w.spawned.effort).toBeUndefined()
+  expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:'))).toBe(true)
+  expect(w.requests).toHaveLength(0)
+
 })
