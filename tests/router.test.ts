@@ -7,15 +7,21 @@ const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
 type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; notReady?: boolean; noSocket?: boolean }
 
-function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}) {
+function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void> } = {}) {
   const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
   mock.env(on, { HOME, ...env })
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: w.session }))
+  on('session.model', () => ({ value: setup.parentModel }))
+  on('turn.step', async function* () { return { answer: '', toolUses: [] } })
   on('process.run', ($: any, e: any) => { w.processes.push(e); if (s1.logFailure) return { deny: 'disk full' }; return { value: { exitCode: 0, stdout: '', stderr: '' } } })
   on('fs.exists', ($: any, e: any) => ({ value: e.path.endsWith('ready.json') ? !s1.notReady : e.path.endsWith('s1.sock') ? !s1.noSocket : true }))
 
-  on('fs.read', ($: any, e: any) => (e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }))
+  on('fs.read', async ($: any, e: any) => {
+    if (setup.readBlock) await setup.readBlock
+    return e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }
+  })
+
   on('ui.log', ($: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
   on('ui.toast', ($: any, e: any) => { w.toasts.push(e.text); if (s1.toastFailure) return { deny: 'toast unavailable' }; return { value: undefined } })
   on('http.fetch', async ($: any, e: any) => {
@@ -48,6 +54,103 @@ test('a Spawn with neither Explicit value gets Model and Effort in one S1 reques
   expect(w.toasts).toEqual(['S1 → haiku · low'])
   expect(w.requests).toHaveLength(1)
   expect(w.requests[0].body.questions.map((q: any) => q.id)).toEqual(['M1', 'M2', 'M3', 'E1', 'E2', 'E3'])
+})
+
+test('Model Abstains on low confidence while Effort is still routed', async ($, on) => {
+  const w = world(on, { answers: {
+    M1: { locate: 0.4, mechanical_edit: 0.15, investigate: 0.15, design: 0.15, synthesize: 0.15 }, M2: no, M3: no,
+    E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no,
+  } })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.spawned.effort).toBe('low')
+  expect(w.toasts).toEqual(['S1 → model abstain · low'])
+})
+
+test('the Parent sonnet/medium Ceiling clamps routed opus/high', async ($, on) => {
+  const w = world(on, { answers: {
+    M1: kind('design'), M2: yes, M3: no,
+    E1: { clear: 0, partly_open: 0, very_open: 1 }, E2: yes, E3: yes,
+  } })
+  for await (const _ of $.turn.step({ model: 'claude-sonnet-5-5', effort: 'medium' } as any)) {}
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium' })
+  expect(w.toasts).toEqual(['S1 → sonnet (clamped from opus) · medium (clamped from high)'])
+})
+
+const unclear = { yes: 0.55, no: 0.45 }
+for (const question of ['E1', 'E2', 'E3']) {
+  test(`Effort Abstains when score term ${question} has low confidence, while Model still routes`, async ($, on) => {
+    const w = world(on, { answers: {
+      M1: kind('locate'), M2: no, M3: no,
+      E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no,
+      [question]: question === 'E1' ? { clear: 0.4, partly_open: 0.3, very_open: 0.3 } : unclear,
+    } })
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned.model).toBe('haiku')
+    expect(w.spawned.effort).toBeUndefined()
+    expect(w.toasts).toEqual(['S1 → haiku · effort abstain'])
+  })
+}
+
+for (const [question, model] of [['M2', undefined], ['M3', 'haiku']] as const) {
+  test(`Model confidence checks the taken path: uncertain ${question}`, async ($, on) => {
+    const w = world(on, { answers: { M1: kind('locate'), M2: no, M3: no, [question]: unclear } })
+    await $.tool.call(call())
+    expect(w.spawned.model).toBe(model)
+  })
+}
+
+test('confidence exactly at the threshold routes the Model', async ($, on) => {
+  const w = world(on, { answers: {
+    M1: { locate: 0.6, mechanical_edit: 0.1, investigate: 0.1, design: 0.1, synthesize: 0.1 }, M2: no, M3: no,
+  } })
+  await $.tool.call(call())
+  expect(w.spawned.model).toBe('haiku')
+})
+
+const hardTask = {
+  M1: kind('design'), M2: yes, M3: no,
+  E1: { clear: 0, partly_open: 0, very_open: 1 }, E2: yes, E3: yes,
+}
+const ceilingCases: [string, object, Record<string, string>, object, string, string][] = [
+  ['none lifts the Ceiling', { model: 'sonnet', effort: 'medium' }, { S1_ROUTER_CEILING: 'none' }, {}, 'opus', 'high'],
+  ['Explicit opus is kept', { model: 'sonnet', effort: 'medium' }, {}, { model: 'opus' }, 'opus', 'medium'],
+  ['Explicit max is kept', { model: 'sonnet', effort: 'medium' }, {}, { effort: 'max' }, 'sonnet', 'max'],
+  ['haiku/low clamps both', { model: 'claude-haiku-5-5', effort: 'low' }, {}, {}, 'haiku', 'low'],
+  ['fable/max allows the full Routing range', { model: 'fable', effort: 'max' }, {}, {}, 'opus', 'high'],
+  ['opus/xhigh allows high Effort', { model: 'claude-opus-5-5', effort: 'xhigh' }, {}, {}, 'opus', 'high'],
+  ['unknown Model leaves only Effort clamped', { model: 'unknown-provider', effort: 'medium' }, {}, {}, 'opus', 'medium'],
+  ['unknown Effort leaves only Model clamped', { model: 'sonnet' }, {}, {}, 'sonnet', 'high'],
+]
+for (const [name, parent, env, explicit, model, effort] of ceilingCases) {
+  test(`Ceiling: ${name}`, async ($, on) => {
+    const w = world(on, { answers: hardTask }, {}, env)
+    for await (const _ of $.turn.step(parent as any)) {}
+    await $.tool.call(call({ effort: undefined, ...explicit }))
+    expect(w.spawned).toMatchObject({ model, effort })
+  })
+}
+
+test('the main Parent Model falls back to session.model while unknown Effort remains unclamped', async ($, on) => {
+  const w = world(on, { answers: hardTask }, {}, {}, { parentModel: 'claude-sonnet-5-5' })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'high' })
+})
+
+test('each Parent uses its own latest step, and an unknown subagent Parent has no Ceiling', async ($, on) => {
+  const w = world(on, { answers: hardTask }, {}, {}, { parentModel: 'sonnet' })
+  for await (const _ of $.turn.step({ model: 'sonnet', effort: 'medium' } as any)) {}
+  for await (const _ of $.turn.step({ agentId: 'child-a', model: 'haiku', effort: 'low' } as any)) {}
+  await $.tool.call(call({ agentId: 'child-a', effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'haiku', effort: 'low' })
+  await $.tool.call(call({ agentId: 'child-b', effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'opus', effort: 'high' })
+  for await (const _ of $.turn.step({ agentId: 'child-a', model: 'sonnet', effort: 'high' } as any)) {}
+  await $.tool.call(call({ agentId: 'child-a', effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'high' })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium' })
 })
 
 const effortCases: [string, Record<string, number>, Record<string, number>, string][] = [
@@ -192,7 +295,27 @@ const failures: [string, S1][] = [
   ['an error response', { status: 400, text: '{"version": 1, "error": "bad request"}' }],
   ['a missing answer', { answers: { M1: kind('locate'), M2: no } }],
   ['probabilities that are not numbers', { text: JSON.stringify({ version: 1, model: 'm', answers: { M1: { probs: { locate: 'high' } }, M2: { probs: no }, M3: { probs: no } } }) }],
+  ['confidence contradicting the probabilities', { text: JSON.stringify({ version: 1, model: 'm', answers: {
+    M1: { probs: kind('locate'), confidence: 1 }, M2: { probs: no, confidence: 0.9 }, M3: { probs: no, confidence: 0.9 },
+  } }) }],
 ]
+const invalidAnswers: [string, object][] = [
+  ['negative probability', { probs: { yes: -0.1, no: 1.1 }, confidence: 1.1 }],
+  ['non-normalized probabilities', { probs: { yes: 0.1, no: 0.8 }, confidence: 0.8 }],
+  ['an unknown option', { probs: { yes: 0.1, no: 0.8, maybe: 0.1 }, confidence: 0.8 }],
+  ['array probabilities', { probs: [0.1, 0.9], confidence: 0.9 }],
+  ['missing confidence', { probs: no }],
+  ['null confidence', { probs: no, confidence: null }],
+  ['nonnumeric confidence', { probs: no, confidence: '0.9' }],
+]
+for (const [name, answer] of invalidAnswers) failures.push([name, { text: JSON.stringify({
+  version: 1, model: 'm', answers: { M1: { probs: kind('locate'), confidence: 0.8 }, M2: answer, M3: { probs: no, confidence: 0.9 } },
+}) }])
+for (const model of [undefined, '', '   ', 42]) failures.push([`invalid Decider model ${JSON.stringify(model)}`, { text: JSON.stringify({
+  version: 1, model, answers: {
+    M1: { probs: kind('locate'), confidence: 0.8 }, M2: { probs: no, confidence: 0.9 }, M3: { probs: no, confidence: 0.9 },
+  },
+}) }])
 for (const [name, s1] of failures) {
   test(`fails open on ${name}: the Spawn proceeds unchanged`, async ($, on) => {
     const w = world(on, s1)
@@ -214,6 +337,22 @@ test('fails open when S1 takes over 5 s', async ($, on) => {
   expect(w.logs.some(l => l.includes('timeout'))).toBe(true)
 })
 
+test('the total 5 s budget includes definition reads, with no late request or toast', async ($, on) => {
+  let release!: () => void
+  const readBlock = new Promise<void>(resolve => { release = resolve })
+  const w = world(on, { answers: { M1: kind('locate'), M2: no, M3: no } },
+    { [`${ROOT}/.claude/agents/Explore.md`]: '---\ndescription: finds things\n---\n' }, {}, { readBlock })
+  const p = $.tool.call(call())
+  await w.clock.advance(5001)
+  expect(w.spawned).toMatchObject(call())
+  expect(w.spawned.model).toBeUndefined()
+  await p
+  release()
+  await w.clock.advance(1000)
+  expect(w.requests).toHaveLength(0)
+  expect(w.toasts).toEqual([])
+  expect(w.logs.some(l => l.includes('timeout'))).toBe(true)
+})
 
 test('before setup every Spawn fails open and the setup notice appears once', async ($, on) => {
   const w = world(on, { notReady: true })
@@ -364,6 +503,7 @@ test('a missing env config fails open without using a lower-precedence file', as
   expect(w.spawned.model).toBeUndefined(); expect(w.spawned.effort).toBeUndefined()
   expect(w.toasts.some(t => t.startsWith('S1 Routing Config invalid:'))).toBe(true)
   expect(w.requests).toHaveLength(0)
+
 })
 
 test('S1_ROUTER=off leaves the Spawn unchanged without asking S1 or showing a toast', async ($, on) => {
@@ -455,4 +595,35 @@ test('constant Model and Effort trees route without making an empty S1 request',
   const entry = JSON.parse(w.processes[0].init.stdin)
   expect(entry.latency_ms).toBe(null)
   expect(entry.s1_model).toBe(null)
+})
+
+
+test('the decision log distinguishes raw values, Parent Ceiling clamps and the applied values', async ($, on) => {
+  const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('opus', 'high') })
+  for await (const _ of $.turn.step({ model: 'sonnet', effort: 'medium' } as any)) {}
+  await $.tool.call(call({ effort: undefined }))
+  const entry = JSON.parse(w.processes[0].init.stdin)
+  expect(entry).toMatchObject({ parent: { model: 'sonnet', effort: 'medium' }, ceiling: 'parent', raw: { model: 'opus', effort: 'high' }, applied: { model: 'sonnet', effort: 'medium' } })
+  expect(entry.reasons.model).toBe('clamp')
+  expect(entry.reasons.effort).toBe('clamp')
+})
+
+test('the decision log records Abstain with raw output, probabilities and no applied value', async ($, on) => {
+  const w = world(on, { answers: { M1: { locate: 0.55, mechanical_edit: 0.15, investigate: 0.1, design: 0.1, synthesize: 0.1 }, M2: no, M3: no } })
+  await $.tool.call(call())
+  const entry = JSON.parse(w.processes[0].init.stdin)
+  expect(entry.raw.model).toBe('haiku')
+  expect(entry.applied).toEqual({})
+  expect(entry.reasons.model).toBe('abstain')
+  expect(entry.probabilities.M1.confidence).toBe(0.55)
+})
+
+test('an invalid config still records the known Parent and fail-open reason', async ($, on) => {
+  const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('fable') })
+  for await (const _ of $.turn.step({ model: 'sonnet', effort: 'medium' } as any)) {}
+  await $.tool.call(call({ effort: undefined }))
+  const entry = JSON.parse(w.processes[0].init.stdin)
+  expect(entry.parent).toEqual({ model: 'sonnet', effort: 'medium' })
+  expect(entry.reasons.fail_open).toBe('Invalid model value fable')
+  expect(entry.applied).toEqual({})
 })
