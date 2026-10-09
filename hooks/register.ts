@@ -222,14 +222,13 @@ async function routingConfig($: Engine, expired: () => boolean): Promise<Routing
     }
     const home = await $.env.get('HOME')
     for (const directory of [await $.session.root(), home]) {
-      const found: { path: string; text: string }[] = []
+      const found: string[] = []
       for (const extension of ['yaml', 'yml', 'json']) {
         const path = `${directory}/.claude/s1-auto-router.${extension}`
-        const text = await readOrUndefined($, path)
-        if (text !== undefined) found.push({ path, text })
+        if (await $.fs.exists(path)) found.push(path)
       }
-      if (!expired() && found.length > 1) toast($, `S1 Routing Config: several formats found; using ${found[0].path}`)
-      if (found.length) return parseConfig(found[0].text)
+      if (!expired() && found.length > 1) toast($, `S1 Routing Config: several formats found; using ${found[0]}`)
+      if (found.length) return parseConfig(await $.fs.read(found[0]))
     }
     return DEFAULT_CONFIG
   } catch (err) {

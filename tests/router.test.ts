@@ -510,6 +510,19 @@ test('duplicate formats warn and yaml wins over yml and json at the same level',
   expect(w.toasts.some(t => t.includes('several formats') && t.includes('s1-auto-router.yaml'))).toBe(true)
 })
 
+test('a readable first YAML config routes and warns about an unreadable lower-priority JSON file', async ($, on) => {
+  const ignored = `${ROOT}/.claude/s1-auto-router.json`
+  const w = world(on, { answers: { costly: yes } }, {
+    [`${ROOT}/.claude/s1-auto-router.yaml`]: yamlCustom,
+    [ignored]: customConfig('haiku', 'low'),
+  }, {}, { readErrors: { [ignored]: 'EACCES ignored JSON is unreadable' } })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject({ model: 'opus', effort: 'medium' })
+  expect(w.toasts).toEqual([
+    `S1 Routing Config: several formats found; using ${ROOT}/.claude/s1-auto-router.yaml`, 'S1 → opus · medium',
+  ])
+})
+
 const choiceQuestion = { type: 'choice', text: 'Which work?', options: [{ id: 'small', description: 'small work' }, { id: 'large', description: 'large work' }] }
 const configErrors: [string, string][] = [
   ['unknown question', customConfig({ if: 'missing', then: 'haiku', else: 'sonnet' })],
