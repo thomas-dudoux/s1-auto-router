@@ -1,0 +1,8 @@
+[project]
+name = "s1-auto-router"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "decider-ai[metal]>=1.9.0",
+    "mlx-lm>=0.32.0",
+]
