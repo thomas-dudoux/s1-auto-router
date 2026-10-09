@@ -5,7 +5,7 @@ const HOME = '/home/u'
 const ROOT = '/proj'
 const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
-type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean }
+type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; notReady?: boolean; noSocket?: boolean }
 
 function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}) {
   const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
@@ -13,6 +13,8 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: w.session }))
   on('process.run', ($: any, e: any) => { w.processes.push(e); if (s1.logFailure) return { deny: 'disk full' }; return { value: { exitCode: 0, stdout: '', stderr: '' } } })
+  on('fs.exists', ($: any, e: any) => ({ value: e.path.endsWith('ready.json') ? !s1.notReady : e.path.endsWith('s1.sock') ? !s1.noSocket : true }))
+
   on('fs.read', ($: any, e: any) => (e.path in files ? { value: files[e.path] } : { deny: `ENOENT ${e.path}` }))
   on('ui.log', ($: any, e: any) => { w.logs.push(e.text); return { value: undefined } })
   on('ui.toast', ($: any, e: any) => { w.toasts.push(e.text); if (s1.toastFailure) return { deny: 'toast unavailable' }; return { value: undefined } })
@@ -210,6 +212,31 @@ test('fails open when S1 takes over 5 s', async ($, on) => {
   await p
   expect(w.spawned).toMatchObject(call()); expect(w.spawned.model).toBeUndefined()
   expect(w.logs.some(l => l.includes('timeout'))).toBe(true)
+})
+
+
+test('before setup every Spawn fails open and the setup notice appears once', async ($, on) => {
+  const w = world(on, { notReady: true })
+  await $.tool.call(call())
+  await $.tool.call(call())
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.processes.filter(p => p.argv.includes('s1.setup'))).toHaveLength(0)
+  expect(w.toasts).toEqual(['S1 not set up, run /s1-setup'])
+})
+
+
+test('a Spawn with no socket starts S1 and fails open, then later Spawns route', async ($, on) => {
+  const s1 = { noSocket: true, answers: { M1: kind('locate'), M2: no, M3: no } }
+  const w = world(on, s1)
+  await $.tool.call(call())
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.processes.filter(p => p.argv.includes('s1.setup'))).toHaveLength(1)
+  expect(w.processes[0].argv.slice(1)).toEqual(['-m', 's1.setup', 'start'])
+  s1.noSocket = false
+  await $.tool.call(call())
+  expect(w.spawned.model).toBe('haiku')
 })
 
 const customConfig = (model: unknown = 'sonnet', effort: unknown = 'medium', extra: object = {}) => JSON.stringify({
