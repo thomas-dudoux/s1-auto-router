@@ -1,6 +1,8 @@
 import type { Engine, Register } from 'claude-code'
 import { definitionOf, definitionPaths, type AgentDefinition } from './agent-definition.ts'
 import { DEFAULT_CONFIG } from './default-config.ts'
+import { parseConfig } from './config.ts'
+import type { RoutingConfig } from './tree.ts'
 import { BUDGET_MS, URL, parseResponse, requestBody, socketPath } from './s1-client.ts'
 import { buildState } from './state.ts'
 import { questionsOf, walk, type Question } from './tree.ts'
@@ -35,7 +37,7 @@ async function route($: Engine, e: any): Promise<{ model?: string } | undefined>
   const def = await agentDefinition($, type)
   if (!def.found || def.frontmatter.model !== undefined) return undefined
 
-  const config = DEFAULT_CONFIG
+  const config = await routingConfig($)
   const tree = config.trees.model!
   const questions = Object.fromEntries(questionsOf(tree).map(id => [id, config.questions[id]]))
   const state = buildState(e, def, offered.get(type), config.prompt_max_chars)
@@ -70,4 +72,31 @@ async function askS1($: Engine, state: object, questions: Record<string, Questio
     $.clock.sleep(BUDGET_MS).then(() => { throw new Error(`S1 timeout over ${BUDGET_MS} ms`) }),
   ])
   return parseResponse(res, questions)
+}
+
+/** First config found wins whole; never merge trees or questions across lookup levels. */
+async function routingConfig($: Engine): Promise<RoutingConfig> {
+  try {
+    const explicit = await $.env.get('S1_ROUTER_CONFIG')
+    if (explicit) {
+      const text = await readOrUndefined($, explicit)
+      if (text === undefined) throw new Error(`Cannot read ${explicit}`)
+      return parseConfig(text)
+    }
+    const home = await $.env.get('HOME')
+    for (const directory of [await $.session.root(), home]) {
+      const found: { path: string; text: string }[] = []
+      for (const extension of ['yaml', 'yml', 'json']) {
+        const path = `${directory}/.claude/s1-auto-router.${extension}`
+        const text = await readOrUndefined($, path)
+        if (text !== undefined) found.push({ path, text })
+      }
+      if (found.length > 1) $.ui.toast(`S1 Routing Config: several formats found; using ${found[0].path}`)
+      if (found.length) return parseConfig(found[0].text)
+    }
+    return DEFAULT_CONFIG
+  } catch (err) {
+    $.ui.toast(`S1 Routing Config invalid: ${err instanceof Error ? err.message : String(err)}`)
+    throw err
+  }
 }
