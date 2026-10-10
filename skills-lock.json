@@ -121,6 +121,13 @@
       "skillPath": "skills/engineering/retro/SKILL.md",
       "computedHash": "b8d55851a2909e26c2dbb2e8563719c87b3b700559f604e4df344f8c27e21047"
     },
+    "ruff": {
+      "source": "astral-sh/claude-code-plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "plugins/astral/skills/ruff/SKILL.md",
+      "computedHash": "905f1c2b66e722ab534d7cbeceafb6ee37d32e3bfe51f3e68c661c51eb19a776"
+    },
     "setup-matt-pocock-skills": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -162,6 +169,20 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/triage/SKILL.md",
       "computedHash": "a683e69163e23630f39c05a50fb9d83a3795a6a6fbd317357669e082cd43a158"
+    },
+    "ty": {
+      "source": "astral-sh/claude-code-plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "plugins/astral/skills/ty/SKILL.md",
+      "computedHash": "5d82b319a84d296fae47f2664228bfac1a36dd832cb487b485a65ec36b3df21f"
+    },
+    "uv": {
+      "source": "astral-sh/claude-code-plugins",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "plugins/astral/skills/uv/SKILL.md",
+      "computedHash": "b1ca9e9826d906f6ee6ea172da50018ec13bb622ac9ba7204bda8b10e7fc8d0a"
     },
     "wait-what": {
       "source": "mattpocock/skills",

@@ -5,10 +5,19 @@ forward pass runs on mlx-lm. The prompt layout and the answer bookkeeping are de
 (decider.prompt, decider.systemone), so prompts match what the model was trained on.
 """
 import math
-from types import SimpleNamespace as NS  # stands in for decider.infer.Example/Q: importing decider.infer loads torch
+from types import (
+    SimpleNamespace as NS,  # stands in for decider.infer.Example/Q: importing decider.infer loads torch
+)
+from typing import Any
 
-from decider.prompt import build, LETTERS
-from decider.systemone import render_state, render_question, plan_rows, row_types, combine_isolated
+from decider.prompt import LETTERS, build
+from decider.systemone import (
+    combine_isolated,
+    plan_rows,
+    render_question,
+    render_state,
+    row_types,
+)
 
 MODELS = {"2B": "midium-ai/decider-2b-dwq-4bit", "4B": "midium-ai/decider-4b-dwq-4bit"}
 
@@ -51,13 +60,13 @@ class S1:
         items = [build(NS(context=ctx, qs=[NS(text=r["question"], options=list(r["options"]), gold=0) for r in row]), self.tok, _Keep(),
                        max_options=len(LETTERS), max_ctx_tokens=1 << 30) for row in rows]
         logits = [lg for per_item in self.score(items) for lg in per_item]
-        probs = [softmax(lg, self.T_by_type.get(t, self.T)) for lg, t in zip(logits, row_types(rqs, index))]
+        probs = [softmax(lg, self.T_by_type.get(t, self.T)) for lg, t in zip(logits, row_types(rqs, index), strict=True)]
         out = {}
         for qid, kind, s, n in index:
             # isolated score: P(this level fits) per row, renormalised over levels (decider.systemone.combine_isolated)
             p = combine_isolated([probs[s + j][1] for j in range(n)])[0] if kind == "iso" else probs[s]
             ids = ["no", "yes"] if rqs[qid]["type"] == "noul" else [o["id"] for o in by_id[qid]["options"]]
-            out[qid] = {"probs": dict(zip(ids, p)), "confidence": max(p)}
+            out[qid] = {"probs": dict(zip(ids, p, strict=True)), "confidence": max(p)}
         return out
 
 
@@ -68,16 +77,16 @@ def load(model="2B"):
 
     import mlx.core as mx
     from decider.prompt import letter_ids
+    from huggingface_hub import snapshot_download
     from mlx_lm import load as mlx_load
     from mlx_lm.models.cache import KVCache
-    from huggingface_hub import snapshot_download
 
     path = Path(snapshot_download(MODELS.get(model, model)))
-    lm, wrapper = mlx_load(str(path))
+    lm, wrapper, *_ = mlx_load(str(path))
     tok = wrapper._tokenizer  # the Hugging Face tokenizer decider.prompt expects
     config = json.loads((path / "decider_config.json").read_text())
     letters = mx.array(letter_ids(tok)[:len(LETTERS)])
-    text = getattr(lm, "language_model", lm)
+    text: Any = getattr(lm, "language_model", lm)  # MLX exposes architecture-specific attributes dynamically.
     head = (lambda h: text.model.embed_tokens.as_linear(h)) if text.args.tie_word_embeddings else text.lm_head
 
     def score(items):

@@ -40,15 +40,20 @@ def _check(req):
         ids.add(q["id"])
         if q.get("type") not in TYPES:
             raise ValueError(f"question {q['id']}: type must be one of {sorted(TYPES)}")
-        opts = q.get("options", [])
-        if not isinstance(opts, list) or not all(
-                isinstance(o, dict) and isinstance(o.get("id"), str) and isinstance(o.get("description"), str) for o in opts):
-            raise ValueError(f"question {q['id']}: options must be a list of {{id, description}} strings")
-        if q["type"] != "yesno" and len(opts) < 2:
-            raise ValueError(f"question {q['id']}: a {q['type']} question needs at least 2 options")
+        _check_options(q)
+
+
+def _check_options(q):
+    opts = q.get("options", [])
+    if not isinstance(opts, list) or not all(
+            isinstance(o, dict) and isinstance(o.get("id"), str) and isinstance(o.get("description"), str) for o in opts):
+        raise ValueError(f"question {q['id']}: options must be a list of {{id, description}} strings")
+    if q["type"] != "yesno" and len(opts) < 2:
+        raise ValueError(f"question {q['id']}: a {q['type']} question needs at least 2 options")
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
+    server: "Server"
     # HTTP/1.0 (the default): the connection closes after each response, so one client cannot hold the single-threaded server
 
     def setup(self):
@@ -111,6 +116,8 @@ def daemon_lock(path):
 
 
 class Server(socketserver.UnixStreamServer):
+    server_address: str
+
     def __init__(self, s1, path, lock, idle_seconds):
         self.lock = lock
         self.s1 = s1

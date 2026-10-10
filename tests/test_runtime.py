@@ -84,3 +84,9 @@ def test_isolated_score_levels_are_asked_one_by_one_and_renormalised():
     assert "Proposed answer: fully specified\nDoes the proposed answer fit?" in TOK.decode(seen[0]["ids"])
     assert answers["E1"]["probs"] == pytest.approx({"clear": 0.75, "very_open": 0.25})
     assert answers["E1"]["confidence"] == pytest.approx(0.75)
+
+
+def test_mismatched_model_probabilities_are_rejected():
+    s1, _ = recording_s1([[0.0]])
+    with pytest.raises(ValueError, match="zip"):
+        s1.answer("ctx", [YESNO])

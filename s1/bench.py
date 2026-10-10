@@ -37,15 +37,18 @@ trained Context / Question / Options / Answer layout and a softmax over the opti
 temperatures from decider_config.json. Measure cold load, per-request latency for the six default questions on a 4k \
 character prompt, independent and packed, and the peak RAM. Record the numbers in the ticket under Answer. Write tests \
 for the probability and prompt-layout code, keep the inference code importable, commit with Conventional Commits. """
+STATE_PROMPT = (PROMPT * 8)[:4000]
 STATE = {"description": "Implement ticket 02 decider spike", "subagent_type": "general-purpose",
          "agent_description": "General-purpose agent for multi-step tasks", "agent_tools": ["*"], "isolation": "worktree",
-         "background": True, "prompt": (PROMPT * 8)[:4000]}
+         "background": True, "prompt": STATE_PROMPT}
 
 
 def timed(fn, repeats):
     ms = []
     for _ in range(repeats):
-        t = time.perf_counter(); fn(); ms.append((time.perf_counter() - t) * 1000)
+        t = time.perf_counter()
+        fn()
+        ms.append((time.perf_counter() - t) * 1000)
     return f"median {statistics.median(ms):.0f} ms, min {min(ms):.0f}, max {max(ms):.0f} (n={repeats})"
 
 
@@ -55,7 +58,7 @@ def main(model="2B", repeats=10):
     s1 = load(model)
     first = s1.answer(STATE, QUESTIONS)
     cold = time.perf_counter() - T0
-    print(f"model {s1.name}, state prompt {len(STATE['prompt'])} chars, cold load + first request {cold:.1f} s")
+    print(f"model {s1.name}, state prompt {len(STATE_PROMPT)} chars, cold load + first request {cold:.1f} s")
     print("independent:", timed(lambda: s1.answer(STATE, QUESTIONS), repeats))
     print("packed:     ", timed(lambda: s1.answer(STATE, QUESTIONS, packed=True), repeats))
     one_by_one = {k: v for q in QUESTIONS for k, v in s1.answer(STATE, [q]).items()}

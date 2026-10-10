@@ -91,3 +91,11 @@ def test_a_bad_request_gets_an_error_and_the_daemon_keeps_serving(sock, raw, mes
 def test_an_unknown_endpoint_is_a_404(sock):
     status, body = post_raw(sock, "/v2/answer", "{}")
     assert status == 404 and "error" in body
+
+
+@pytest.mark.parametrize("options", [None, [{"id": "A"}], [{"id": 1, "description": "x"}]])
+def test_malformed_options_are_still_rejected(sock, options):
+    question = {"id": "Q", "type": "choice", "text": "?", "options": options}
+    status, body = post(sock, "/v1/answer", {"version": 1, "state": {}, "questions": [question]})
+    assert status == 400
+    assert "options must be a list" in body["error"]

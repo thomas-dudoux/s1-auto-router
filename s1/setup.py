@@ -2,10 +2,10 @@
 import http.client
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from s1.client import post
 from s1.daemon import SOCKET, daemon_lock
@@ -60,6 +60,7 @@ def stop():
 def setup(restart=False):
     from huggingface_hub import snapshot_download
     from huggingface_hub.errors import LocalEntryNotFoundError
+
     from s1.runtime import MODELS
 
     model = os.environ.get("S1_MODEL", "2B")
