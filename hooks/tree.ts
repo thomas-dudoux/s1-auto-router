@@ -49,5 +49,6 @@ export function walk(node: Node, answers: Answers, path: string[] = []): { value
     return walk(top(answers[node.if]) === 'yes' ? node.then : node.else, answers, path)
   }
   path.push(node.switch)
-  return walk(node.cases[top(answers[node.switch])] ?? node.default, answers, path)
+  const option = top(answers[node.switch])
+  return walk(Object.hasOwn(node.cases, option) ? node.cases[option] : node.default, answers, path)
 }

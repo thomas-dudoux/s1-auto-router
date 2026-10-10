@@ -8,7 +8,6 @@ import math
 from types import (
     SimpleNamespace as NS,  # stands in for decider.infer.Example/Q: importing decider.infer loads torch
 )
-from typing import Any
 
 from decider.prompt import LETTERS, build
 from decider.systemone import (
@@ -82,11 +81,12 @@ def load(model="2B"):
     from mlx_lm.models.cache import KVCache
 
     path = Path(snapshot_download(MODELS.get(model, model)))
-    lm, wrapper, *_ = mlx_load(str(path))
-    tok = wrapper._tokenizer  # the Hugging Face tokenizer decider.prompt expects
+    loaded = mlx_load(str(path), return_config=False)
+    lm = loaded[0]
+    tok = loaded[1]._tokenizer  # the Hugging Face tokenizer decider.prompt expects
     config = json.loads((path / "decider_config.json").read_text())
     letters = mx.array(letter_ids(tok)[:len(LETTERS)])
-    text: Any = getattr(lm, "language_model", lm)  # MLX exposes architecture-specific attributes dynamically.
+    text = lm.language_model if hasattr(lm, "language_model") else lm
     head = (lambda h: text.model.embed_tokens.as_linear(h)) if text.args.tie_word_embeddings else text.lm_head
 
     def score(items):

@@ -23,10 +23,19 @@ def scripted_score(items):
 
 
 @pytest.fixture
-def sock():
+def sock(request):
     """A daemon over a fake S1 on a real temporary unix socket (under /tmp: sun_path is about 100 bytes)."""
     path = str(Path(tempfile.mkdtemp(dir="/tmp")) / "s1.sock")
-    server = serve(S1(CharTok(), scripted_score, {}, name="decider-fake"), path)
+    failure = getattr(request, "param", None)
+
+    def score(items):
+        nonlocal failure
+        if failure is not None:
+            error, failure = failure, None
+            raise error
+        return scripted_score(items)
+
+    server = serve(S1(CharTok(), score, {}, name="decider-fake"), path)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield path
     server.shutdown()
@@ -72,6 +81,8 @@ def post_raw(path, url, raw):
     (json.dumps({"version": 2, "state": {}, "questions": QUESTIONS}), "unsupported version 2"),
     (json.dumps({"state": {}, "questions": QUESTIONS}), "unsupported version None"),
     (json.dumps({"version": 1, "state": "x", "questions": QUESTIONS}), "state"),
+    (json.dumps({"version": 1, "state": {}, "questions": [1]}), "string id and text"),
+    (json.dumps({"version": 1, "state": {}, "questions": [{"id": 1, "type": "yesno", "text": "?"}]}), "string id and text"),
     (json.dumps({"version": 1, "state": {}, "questions": []}), "non-empty"),
     (json.dumps({"version": 1, "state": {}, "questions": [{"id": "Q", "type": "rank", "text": "?"}]}), "type"),
     (json.dumps({"version": 1, "state": {}, "questions": [{"id": "Q", "type": "choice", "text": "?", "options": []}]}),
@@ -99,3 +110,17 @@ def test_malformed_options_are_still_rejected(sock, options):
     status, body = post(sock, "/v1/answer", {"version": 1, "state": {}, "questions": [question]})
     assert status == 400
     assert "options must be a list" in body["error"]
+
+
+@pytest.mark.parametrize("sock, status, error", [
+    (TypeError("inference failed"), 500, "TypeError: inference failed"),
+    (RuntimeError("inference failed"), 500, "RuntimeError: inference failed"),
+    (ValueError("too many options"), 400, "too many options"),
+], indirect=["sock"])
+def test_inference_errors_preserve_the_contract_and_the_daemon_keeps_serving(sock, status, error):
+    request = {"version": 1, "state": {}, "questions": QUESTIONS}
+    actual_status, body = post(sock, "/v1/answer", request)
+    assert actual_status == status
+    assert body == {"version": 1, "error": error}
+    actual_status, body = post(sock, "/v1/answer", request)
+    assert actual_status == 200 and set(body["answers"]) == {"M1", "M2", "E1"}

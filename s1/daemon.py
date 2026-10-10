@@ -4,6 +4,8 @@
 
 It knows nothing about Routing (ADR 0001). One request at a time; the model is loaded once at start.
 """
+from __future__ import annotations
+
 import fcntl
 import http.server
 import json
@@ -21,20 +23,20 @@ TYPES = {"choice", "yesno", "score"}
 
 
 def _check(req):
-    """Raise ValueError with a message unless req is a valid v1 request."""
+    """Raise ValueError or TypeError with a message unless req is a valid v1 request."""
     if not isinstance(req, dict):
-        raise ValueError("request must be a JSON object")
+        raise TypeError("request must be a JSON object")
     if req.get("version") != VERSION:
         raise ValueError(f"unsupported version {req.get('version')!r}, this daemon speaks {VERSION}")
     if not isinstance(req.get("state"), dict):
-        raise ValueError("state must be a JSON object")
+        raise TypeError("state must be a JSON object")
     qs = req.get("questions")
     if not isinstance(qs, list) or not qs:
         raise ValueError("questions must be a non-empty list")
     ids = set()
     for q in qs:
         if not isinstance(q, dict) or not isinstance(q.get("id"), str) or not isinstance(q.get("text"), str):
-            raise ValueError(f"each question needs a string id and text: {q!r}")
+            raise TypeError(f"each question needs a string id and text: {q!r}")
         if q["id"] in ids:
             raise ValueError(f"duplicate question id {q['id']!r}")
         ids.add(q["id"])
@@ -53,7 +55,7 @@ def _check_options(q):
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server: "Server"
+    server: Server
     # HTTP/1.0 (the default): the connection closes after each response, so one client cannot hold the single-threaded server
 
     def setup(self):
@@ -73,8 +75,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             req = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
             _check(req)
+        except (ValueError, TypeError) as e:
+            return self._send(400, {"version": VERSION, "error": str(e)})
+        try:
             answers = self.server.s1.answer(req["state"], req["questions"])
-        except ValueError as e:  # includes malformed JSON and runtime limits (e.g. too many options)
+        except ValueError as e:  # runtime limits (e.g. too many options)
             return self._send(400, {"version": VERSION, "error": str(e)})
         except Exception as e:
             return self._send(500, {"version": VERSION, "error": f"{type(e).__name__}: {e}"})
@@ -118,7 +123,7 @@ def daemon_lock(path):
 class Server(socketserver.UnixStreamServer):
     server_address: str
 
-    def __init__(self, s1, path, lock, idle_seconds):
+    def __init__(self, s1, path: str, lock, idle_seconds):
         self.lock = lock
         self.s1 = s1
         self.idle_seconds = idle_seconds
@@ -143,7 +148,7 @@ class Server(socketserver.UnixStreamServer):
         self.lock.close()
 
 
-def serve(s1, path=SOCKET, *, lock=None, idle_seconds=30 * 60):
+def serve(s1, path: str = SOCKET, *, lock=None, idle_seconds=30 * 60):
     """Bind one daemon to path, replacing only a stale socket; close releases the lock and removes the socket."""
     lock = lock or daemon_lock(path)
     try:
