@@ -6,3 +6,29 @@ dependencies = [
     "decider-ai[metal]>=1.9.0",
     "mlx-lm>=0.32.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+    "ty>=0.0.85",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py311"
+extend-exclude = [".agents", ".claude", ".scratch"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ty.environment]
+python-version = "3.11"
+
+[tool.ty.src]
+exclude = [".agents/**", ".claude/**", ".scratch/**"]
