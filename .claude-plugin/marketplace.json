@@ -1,0 +1,12 @@
+{
+  "name": "s1-auto-router",
+  "description": "A local model router for Claude Code subagents",
+  "owner": { "name": "Thomas DUDOUX" },
+  "plugins": [
+    {
+      "name": "s1-auto-router",
+      "source": ".",
+      "description": "Selects a model and an effort level for Claude Code subagents"
+    }
+  ]
+}
