@@ -1,4 +1,5 @@
 import { test, expect, mock } from 'claude-code/testing'
+import { SOLUTION_SPACE_CONFIG as candidate } from '../hooks/solution-space-candidate.ts'
 
 // Seam A: the real tool.call{Agent} hook, with fake S1 at http.fetch and fake files at fs.read.
 const HOME = '/home/u'
@@ -49,6 +50,73 @@ const yes = { yes: 0.9, no: 0.1 }
 const no = { yes: 0.1, no: 0.9 }
 const kind = (k: string) => Object.fromEntries(['locate', 'mechanical_edit', 'investigate', 'design', 'synthesize'].map(o => [o, o === k ? 0.8 : 0.05]))
 const taggedPrompt = '<metadata><work-role>implementer</work-role><solution-space>Approach is settled.</solution-space></metadata><prompt>Implement the specified option and verify its behavior.</prompt>'
+
+test('opt-in candidate lets prescribed low-risk feature implementation use Haiku', async ($, on) => {
+  const w = world(on, { answers: {
+    M1: kind('design'), M2: no, M3: no,
+    E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no,
+  } }, { '/candidate.json': JSON.stringify(candidate) }, { S1_ROUTER_CONFIG: '/candidate.json' })
+  await $.tool.call(call({ effort: undefined, prompt: taggedPrompt }))
+  expect(w.spawned).toMatchObject({ model: 'haiku', effort: 'low', prompt: taggedPrompt })
+  expect(w.requests[0].body.state).toMatchObject({ work_role: 'implementer', solution_space: 'Approach is settled.' })
+  expect(w.requests[0].body.questions.find((q: any) => q.id === 'E1').text.includes('solution_space')).toBe(true)
+})
+
+test('candidate keeps costly prescribed implementation conservative for both outputs', async ($, on) => {
+  const w = world(on, { answers: {
+    M1: kind('design'), M2: no, M3: yes,
+    E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no,
+  } }, { '/candidate.json': JSON.stringify(candidate) }, { S1_ROUTER_CONFIG: '/candidate.json' })
+  await $.tool.call(call({ effort: undefined, prompt: taggedPrompt }))
+  expect(w.spawned).toMatchObject({ model: 'opus', effort: 'medium' })
+})
+
+// These are rule checks with controlled S1 answers, not classification accuracy measurements.
+const candidateAnswers = {
+  M1: kind('design'), M2: no, M3: no,
+  E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no,
+}
+for (const [name, role, solution, answers, model, effort] of [
+  ['partly open implementation', 'implementer', 'Choose the storage representation.', { E1: { clear: 0, partly_open: 1, very_open: 0 } }, 'sonnet', 'medium'],
+  ['open implementation', 'implementer', 'The approach remains undecided.', { E1: { clear: 0, partly_open: 0, very_open: 1 }, E2: yes }, 'opus', 'high'],
+  ['prescribed cross-component implementation', 'implementer', 'The approach is settled.', { M2: yes }, 'opus', 'low'],
+  ['prescribed substantial verification', 'feature verification specialist', 'The approach is settled.', { E2: yes, E3: yes }, 'haiku', 'medium'],
+  ['role describes work without restricting Haiku', 'architect', 'The approach is settled.', {}, 'haiku', 'low'],
+] as [string, string, string, Record<string, Record<string, number>>, string, string][]) {
+  test(`candidate routes ${name}`, async ($, on) => {
+    const prompt = `<metadata><work-role>${role}</work-role><solution-space>${solution}</solution-space></metadata><prompt>Implement the requested feature and preserve existing behavior.</prompt>`
+    const w = world(on, { answers: { ...candidateAnswers, ...answers } },
+      { '/candidate.json': JSON.stringify(candidate) }, { S1_ROUTER_CONFIG: '/candidate.json' })
+    await $.tool.call(call({ effort: undefined, prompt }))
+    expect(w.spawned).toMatchObject({ model, effort, prompt })
+    expect(w.requests[0].body.state).toMatchObject({ work_role: role, solution_space: solution,
+      prompt: 'Implement the requested feature and preserve existing behavior.' })
+  })
+}
+
+for (const [name, answers, explicit, parent, expected] of [
+  ['uncertain interactions Abstain only Model', { M2: { yes: 0.55, no: 0.45 } }, {}, {}, { model: undefined, effort: 'low' }],
+  ['uncertain workload Abstain only Effort', { E2: { yes: 0.55, no: 0.45 } }, {}, {}, { model: 'haiku', effort: undefined }],
+  ['risky Model path does not require confident Solution Space', { M3: yes, E1: { clear: 0.4, partly_open: 0.3, very_open: 0.3 } }, {}, {}, { model: 'opus', effort: undefined }],
+  ['Explicit Model is preserved', {}, { model: 'sonnet' }, {}, { model: 'sonnet', effort: 'low' }],
+  ['Explicit Effort is preserved', {}, { effort: 'max' }, {}, { model: 'haiku', effort: 'max' }],
+  ['Parent Ceiling applies to both outputs', { E1: { clear: 0, partly_open: 0, very_open: 1 }, E2: yes }, {}, { model: 'sonnet', effort: 'medium' }, { model: 'sonnet', effort: 'medium' }],
+] as [string, Record<string, Record<string, number>>, object, any, any][]) {
+  test(`candidate preserves routing control: ${name}`, async ($, on) => {
+    const w = world(on, { answers: { ...candidateAnswers, ...answers } },
+      { '/candidate.json': JSON.stringify(candidate) }, { S1_ROUTER_CONFIG: '/candidate.json' })
+    if (parent.model) for await (const _ of $.turn.step(parent)) {}
+    await $.tool.call(call({ effort: undefined, prompt: taggedPrompt, ...explicit }))
+    expect(w.spawned.model).toBe(expected.model)
+    expect(w.spawned.effort).toBe(expected.effort)
+  })
+}
+
+test('candidate rules remain opt-in: default prescribed feature still selects Sonnet', async ($, on) => {
+  const w = world(on, { answers: candidateAnswers })
+  await $.tool.call(call({ effort: undefined, prompt: taggedPrompt }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'low' })
+})
 
 test('native Agent describes Parent-authored routing metadata without changing native guidance or placement', async ($, on) => {
   on('tool.describe', ($: any, e: any) => ({ description: e.description, isDeferred: true }))

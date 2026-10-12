@@ -1,0 +1,60 @@
+// Experimental: do not replace defaults until the paired task-outcome pilot passes.
+// The selectable JSON copy is checked by eval/run.mjs --check.
+import type { RoutingConfig } from './tree.ts'
+
+export const SOLUTION_SPACE_CONFIG: RoutingConfig = {
+  threshold: 0.6,
+  prompt_max_chars: 4000,
+  questions: {
+    M1: {
+      type: 'choice', text: 'What kind of work does this Spawn ask for? Use work_role as context, not a model eligibility restriction; infer work from prompt when absent.', options: [
+        { id: 'locate', description: 'find where something is: files, symbols, config, docs' },
+        { id: 'mechanical_edit', description: 'a mechanical, well-specified code change' },
+        { id: 'investigate', description: 'investigate a bug or behaviour and explain the cause' },
+        { id: 'design', description: 'design or implement a new feature, module or architecture' },
+        { id: 'synthesize', description: 'summarise or synthesise information into a report' },
+      ],
+    },
+    M2: { type: 'yesno', text: 'Does completing prompt require understanding interactions across multiple files, components, or systems, even if solution_space says the approach is settled?' },
+    M3: { type: 'yesno', text: 'Would a subtle mistake in prompt be costly, even if solution_space says the approach is settled?' },
+    E1: {
+      type: 'choice', text: 'How many decisions remain unresolved about the approach? Use Parent solution_space as the primary description; infer from prompt if absent. Do not count workload or mistake cost as unresolved decisions.', options: [
+        { id: 'clear', description: 'approach is settled; fully specified instructions with little to decide' },
+        { id: 'partly_open', description: 'some approach decisions remain unresolved, requiring judgment' },
+        { id: 'very_open', description: 'many approach decisions remain unresolved, requiring substantial exploration or design' },
+      ],
+    },
+    E2: { type: 'yesno', text: 'Is prompt a long multi-step task, independently of how settled the approach is in solution_space?' },
+    E3: { type: 'yesno', text: 'Does prompt explicitly require testing, validation, measurements, or exact analysis beyond a simple lookup, typo fix, or short summary, even if the approach is settled in solution_space?' },
+  },
+  trees: {
+    model: {
+      switch: 'M1',
+      cases: {
+        locate: { if: 'M2', then: 'sonnet', else: 'haiku' },
+        mechanical_edit: {
+          if: 'M2', then: 'sonnet', else: { if: 'M3', then: 'sonnet', else: {
+            switch: 'E1', cases: { clear: 'haiku', partly_open: 'sonnet', very_open: 'sonnet' }, default: 'sonnet',
+          } },
+        },
+        investigate: { if: 'M2', then: 'opus', else: { if: 'M3', then: 'opus', else: 'sonnet' } },
+        design: {
+          if: 'M2', then: 'opus', else: { if: 'M3', then: 'opus', else: {
+            switch: 'E1', cases: { clear: 'haiku', partly_open: 'sonnet', very_open: 'opus' }, default: 'sonnet',
+          } },
+        },
+        synthesize: { if: 'M2', then: 'opus', else: { if: 'M3', then: 'opus', else: 'sonnet' } },
+      },
+      default: 'sonnet',
+    },
+    effort: {
+      score: [
+        { q: 'E1', weights: { clear: 0, partly_open: 1, very_open: 2 } },
+        { q: 'E2', weight: 1 },
+        { q: 'E3', weight: 1 },
+        { q: 'M3', weight: 1 },
+      ],
+      thresholds: { low: 0, medium: 1, high: 2.5 },
+    },
+  },
+}

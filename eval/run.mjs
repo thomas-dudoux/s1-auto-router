@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { homedir } from 'node:os'
 import { DEFAULT_CONFIG } from '../hooks/default-config.ts'
+import { SOLUTION_SPACE_CONFIG } from '../hooks/solution-space-candidate.ts'
 import { parseConfig } from '../hooks/config.ts'
 import { questionsOf, walk } from '../hooks/tree.ts'
 import { buildState } from '../hooks/state.ts'
@@ -71,6 +72,8 @@ async function main() {
   if (process.argv[2] === '--check') {
     assert.deepEqual(parseConfig(readFileSync(new URL('../hooks/default-config.yaml', import.meta.url), 'utf8')), DEFAULT_CONFIG,
       'shipped YAML defaults must match production Routing Config')
+    assert.deepEqual(parseConfig(readFileSync(new URL('../hooks/solution-space-candidate.json', import.meta.url), 'utf8')), SOLUTION_SPACE_CONFIG,
+      'selectable candidate JSON must match the native Agent test configuration')
     // Counts must separate a confident wrong result from an uncertain unanswered one.
     const example = { trees: { model: { if: 'q', then: 'opus', else: 'haiku' }, effort: 'low' }, threshold: .6 }
     const records = [{ expected: { model: 'haiku', effort: 'low' }, ms: 10,
@@ -83,7 +86,7 @@ async function main() {
     })
     assert.deepEqual(decide(records[0].answers, 5001, example), { model: 'fail-open', effort: 'fail-open' })
     assert.deepEqual(await ask('/no-such-socket', {}, {}), { model: 'constant trees (no S1)', answers: {}, ms: 0 })
-    console.log('Eval self-check passed: shipped defaults, labels/coverage, percentile ordering, wrong vs Abstain, 5s fail-open.')
+    console.log('Eval self-check passed: shipped defaults and candidate, labels/coverage, percentile ordering, wrong vs Abstain, 5s fail-open.')
     return
   }
   if (process.argv.length > 4) throw new Error('Usage: node eval/run.mjs [socket] [config.yaml|json] | --check')

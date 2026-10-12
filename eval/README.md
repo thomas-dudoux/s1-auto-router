@@ -13,6 +13,25 @@ Every case prints its expected and actual Model/Effort, disagreements, Abstains,
 
 `fixtures.json` preserves all 24 user-approved labels unchanged. It covers every M1 kind and E1 level. `long-state.json` is the existing `s1.bench.STATE`, exported without loading a model. Its repeated implementation prompt measures 2000/4000-character latency with one warmup and five samples each. It is an unlabeled benchmark, separate from the accuracy fixtures.
 
+## Experimental Solution Space rules
+
+For an opt-in Claude Code session, select the candidate through the existing config setting:
+
+```sh
+S1_ROUTER_CONFIG="$PWD/hooks/solution-space-candidate.json" claude --plugin-dir .
+```
+
+Unset `S1_ROUTER_CONFIG` to return to ordinary config selection. The candidate uses Parent `solution_space` as the primary account of unresolved approach decisions and retains the assignment for interactions, mistake cost, workload and verification. `work_role` describes work without restricting model eligibility. Bounded low-risk implementation can select Haiku; open, costly or interaction-heavy implementation retains stronger options. Model and Effort have separate trees and confidence paths.
+
+The candidate is experimental; shipped defaults remain unchanged. E1 is a choice question so Model can branch on openness; Effort still uses its probability-weighted answer and separately adds workload, verification and mistake cost. This question-type and wording change needs real S1 calibration. Controlled native Agent tests establish rule behavior, not classification accuracy, subagent success or cost savings. Use the existing eval with the candidate config for calibration, preserve the approved labels as historical references, and complete the paired Parent/subagent pilot before promoting defaults.
+
+`solution-space-candidate.ts` is the configuration data used by the native Agent tests; its selectable JSON copy is checked by `node eval/run.mjs --check`. After changing candidate data, regenerate that copy with Node 24+:
+
+```sh
+node --input-type=module -e 'import { writeFileSync } from "node:fs"; import { SOLUTION_SPACE_CONFIG } from "./hooks/solution-space-candidate.ts"; writeFileSync("hooks/solution-space-candidate.json", JSON.stringify(SOLUTION_SPACE_CONFIG, null, 2) + "\n")'
+node eval/run.mjs --check
+```
+
 ## Measured tuning, 2026-10-09
 
 Apple M4, 16 GB, cached `decider-2b-v11` via the real daemon's unix socket; Hub offline mode; Node 26.11.0. One isolated daemon served all requests and was stopped afterward. No 4B download or environment installation was performed.
