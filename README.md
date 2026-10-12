@@ -112,8 +112,10 @@ This limit is the parent ceiling.
 The ceiling applies only to values that the plugin selects.
 
 If a request fails, the plugin does not change the Agent call.
-The routing request has a five-second time limit.
-The decision log can add up to one second.
+The routing flow has a five-second time limit.
+This limit includes the decision log.
+A log write has a one-second limit within the remaining routing time.
+
 After setup, the plugin can start the daemon if it stopped.
 The plugin skips routing for the call that starts the daemon.
 The daemon stops after 30 minutes without a request.
@@ -225,10 +227,12 @@ The plugin does not send routing requests to an external Decider service.
 Model downloads use Hugging Face.
 Claude Code sends subagent assignments to Claude models.
 
-The plugin writes a decision for each Agent call to `~/.cache/s1-auto-router/decisions.jsonl`.
+The plugin writes decisions to `~/.cache/s1-auto-router/decisions.jsonl`.
+A time limit or a file error can prevent a log entry.
 Decisions can contain prompt text, task metadata, questions, probabilities, selected values, and error details.
 The default prompt limit is 4,000 characters.
 The limit does not include all other fields.
+
 The log file has owner-only read and write permissions.
 The plugin does not limit the log size or remove old log data.
 
@@ -269,7 +273,7 @@ Decider model files stay in the Hugging Face cache.
 - [Daemon design](docs/adr/0001-shared-s1-daemon.md)
 - [Task metadata design](docs/adr/0002-native-agent-routing-metadata.md)
 - [Evaluation results](eval/README.md)
-- [Contributor instructions](CLAUDE.md)
+- [Contributor instructions](AGENTS.md)
 - [Third-party notices](THIRD_PARTY_NOTICES.md).
 
 This user guide follows the writing rules and vocabulary of [ASD-STE100, Issue 9](https://www.asd-ste100.org/about_STE.html).
