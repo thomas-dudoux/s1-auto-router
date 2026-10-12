@@ -5,11 +5,14 @@ Run from the repo with Node 24+ and an already prepared S1 daemon:
 ```sh
 node eval/run.mjs --check
 node eval/run.mjs [socket] [config.yaml|json]
+node eval/run.mjs [socket] [config.yaml|json] [cases.json] [report.json]
 ```
 
 The socket defaults to `~/.cache/s1-auto-router/s1.sock`. `/s1-setup` prepares and starts S1; the eval never installs dependencies, downloads weights, or starts another model. An optional config is read through the real Routing Config parser. Constant trees with no questions run without a daemon. The script imports the actual default config, state builder, versioned request/response client, and Decision Tree walker. There is no Parent Ceiling in this measurement.
 
 Every case prints its expected and actual Model/Effort, disagreements, Abstains, and request latency. A request over the five-second Routing budget is counted as fail-open. Latency p50/p95 use nearest ranks after one warmup. Cached answers replay confidence and Effort score thresholds without further inference. Raw answers, config, and measurements are saved privately to `.scratch/s1-eval-results.json`; this file is overwritten on each run.
+
+An optional corpus can contain unlabeled cases without `expected`; their confident outputs count as `unlabeled`, never correct/wrong. Named private reports persist config/corpus/code identities, hardware and loaded model. Connection/infrastructure failures produce a report with the error and unavailable measurements rather than fabricated classification counts. With an explicit corpus, only its cases run; the default invocation retains the separate long-state probes. See the [Solution Space calibration report](solution-space-calibration.md) and [predeclared paired pilot](solution-space-pilot.md).
 
 `fixtures.json` preserves all 24 user-approved labels unchanged. It covers every M1 kind and E1 level. `long-state.json` is the existing `s1.bench.STATE`, exported without loading a model. Its repeated implementation prompt measures 2000/4000-character latency with one warmup and five samples each. It is an unlabeled benchmark, separate from the accuracy fixtures.
 
