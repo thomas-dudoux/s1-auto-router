@@ -3,12 +3,14 @@ import json
 import socket
 import tempfile
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
+from s1 import daemon, setup
 from s1.client import post
-from s1.daemon import serve
+from s1.daemon import daemon_lock, serve
 from s1.runtime import S1
 
 
@@ -23,23 +25,39 @@ def scripted_score(items):
 
 
 @pytest.fixture
-def sock(request):
+def inference_events():
+    return threading.Event(), threading.Event()
+
+
+@pytest.fixture
+def sock(request, inference_events):
     """A daemon over a fake S1 on a real temporary unix socket (under /tmp: sun_path is about 100 bytes)."""
     path = str(Path(tempfile.mkdtemp(dir="/tmp")) / "s1.sock")
     failure = getattr(request, "param", None)
 
     def score(items):
         nonlocal failure
+        if failure == "slow":
+            entered, release = inference_events
+            entered.set()
+            assert release.wait(timeout=10)
+            return scripted_score(items)
         if failure is not None:
             error, failure = failure, None
             raise error
         return scripted_score(items)
 
     server = serve(S1(CharTok(), score, {}, name="decider-fake"), path)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def run():
+        with server:
+            server.serve_forever()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
     yield path
     server.shutdown()
-    server.server_close()
+    thread.join(timeout=5)
 
 
 QUESTIONS = [
@@ -124,3 +142,41 @@ def test_inference_errors_preserve_the_contract_and_the_daemon_keeps_serving(soc
     assert body == {"version": 1, "error": error}
     actual_status, body = post(sock, "/v1/answer", request)
     assert actual_status == 200 and set(body["answers"]) == {"M1", "M2", "E1"}
+
+
+@pytest.mark.parametrize("sock", ["slow"], indirect=True)
+def test_stop_waits_for_busy_inference_and_removes_the_socket(monkeypatch, sock, inference_events):
+    entered, release = inference_events
+    monkeypatch.setattr(setup, "SOCKET", sock)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        answer = pool.submit(post, sock, "/v1/answer", {"version": 1, "state": {}, "questions": QUESTIONS})
+        assert entered.wait(timeout=5)
+        timer = threading.Timer(2, release.set)
+        timer.start()
+        try:
+            setup.stop()
+            assert answer.result(timeout=5)[0] == 200
+            assert not Path(sock).exists()
+        finally:
+            release.set()
+            timer.cancel()
+
+
+def test_stop_preserves_an_incompatible_daemon(monkeypatch, sock):
+    monkeypatch.setattr(setup, "SOCKET", sock)
+    monkeypatch.setattr(daemon, "VERSION", 2)
+    with pytest.raises(RuntimeError, match="older daemon"):
+        setup.stop()
+    status, body = post(sock, "/v1/health", {})
+    assert status == 200 and body["version"] == 2
+    assert Path(sock).exists()
+
+
+def test_stop_preserves_an_unverified_startup_owner(monkeypatch, tmp_path):
+    path = str(tmp_path / "s1.sock")
+    monkeypatch.setattr(setup, "SOCKET", path)
+    with daemon_lock(path):
+        with pytest.raises(RuntimeError, match="starting"):
+            setup.stop()
+        with pytest.raises(BlockingIOError):
+            daemon_lock(path)
