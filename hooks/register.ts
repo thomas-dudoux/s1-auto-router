@@ -67,6 +67,7 @@ export const register: Register = (on) => {
       questions: [], probabilities: {}, explicit: { model: e.model ?? null, effort: e.effort ?? null },
       parent: { model: parents.get(e.agentId ?? 'main')?.model ?? null, effort: parents.get(e.agentId ?? 'main')?.effort ?? null }, ceiling: 'parent', raw: {}, applied: {}, reasons: {}, latency_ms: null, s1_model: null,
     }
+    const deadline = $.clock.sleep(BUDGET_MS).then(() => { expired = true; throw new Error(`S1 timeout over ${BUDGET_MS} ms`) })
     try {
       patch = await Promise.race([
         (async () => {
@@ -78,7 +79,7 @@ export const register: Register = (on) => {
           if (disabled) { decision.reasons.skip = 'disabled'; return undefined }
           return route($, e, () => expired, decision)
         })(),
-        $.clock.sleep(BUDGET_MS).then(() => { expired = true; throw new Error(`S1 timeout over ${BUDGET_MS} ms`) }),
+        deadline,
       ])
     } catch (err) {
       if (expired && decision.started_ms !== undefined) decision.latency_ms = Math.max(0, BUDGET_MS - (decision.started_ms - Date.parse(decision.timestamp)))
@@ -86,7 +87,7 @@ export const register: Register = (on) => {
       warning($, `s1-auto-router fail-open: ${decision.reasons.fail_open}`)
     }
     decision.applied = patch ?? {}
-    await appendDecision($, decision)
+    if (!expired) await appendDecision($, decision, deadline)
     return next(patch ? { ...e, ...patch } : e)
   })
 }
@@ -112,11 +113,9 @@ async function route($: Engine, e: any, expired: () => boolean, decision: Decisi
   const outputs = (['model', 'effort'] as const).filter(output =>
     e[output] === undefined && def.frontmatter[output] === undefined && config.trees[output] !== undefined)
   if (!outputs.length) { decision.reasons.skip = 'explicit'; return undefined }
-  if (expired()) return undefined
-  if (!await daemonReady($, expired, decision)) return undefined
-
   const ids: string[] = []
   for (const output of outputs) questionsOf(config.trees[output]!, ids)
+  if (!await daemonReady($, expired, decision, ids.length > 0)) return undefined
   const questions = Object.fromEntries(ids.map(id => [id, config.questions[id]]))
   const state = buildState(e, def, offered.get(type), config.prompt_max_chars)
   decision.state = state
@@ -186,7 +185,7 @@ async function askS1($: Engine, state: object, questions: Record<string, Questio
   return parseResponse(res, questions)
 }
 
-async function daemonReady($: Engine, expired: () => boolean, decision: Decision): Promise<boolean> {
+async function daemonReady($: Engine, expired: () => boolean, decision: Decision, needsInference: boolean): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (expired()) return false
   const cache = `${home}/.cache/s1-auto-router`
@@ -202,6 +201,7 @@ async function daemonReady($: Engine, expired: () => boolean, decision: Decision
     }
     return false
   }
+  if (!needsInference) return true
   const socket = await $.fs.exists(socketPath(home))
   if (expired()) return false
   if (!socket) {
@@ -246,7 +246,7 @@ function warning($: Engine, text: string) {
 }
 
 /** The SDK has no append/chmod; use stdlib Python and stdin so prompts stay out of process arguments. */
-async function appendDecision($: Engine, decision: Decision) {
+async function appendDecision($: Engine, decision: Decision, deadline: Promise<never>) {
   let expired = false
   try {
     await Promise.race([
@@ -254,15 +254,19 @@ async function appendDecision($: Engine, decision: Decision) {
         const home = await $.env.get('HOME')
         if (expired) return
         if (!home) throw new Error('HOME is unavailable')
+        const remaining = Math.min(1000, BUDGET_MS - ((await $.clock.now()) - Date.parse(decision.timestamp)))
+        if (expired || remaining <= 0) throw new Error('decision append timed out')
         const { started_ms, ...entry } = decision
         const result = await $.process.run(['python3', `${$.plugin.root}/s1/append_log.py`, `${home}/.cache/s1-auto-router/decisions.jsonl`], {
-          stdin: JSON.stringify(entry) + '\n', timeoutMs: 1000,
+          stdin: JSON.stringify(entry) + '\n', timeoutMs: remaining,
         })
         if (result.exitCode !== 0) throw new Error(result.stderr || `exit ${result.exitCode}`)
       })(),
       $.clock.sleep(1000).then(() => { expired = true; throw new Error('decision append timed out') }),
+      deadline,
     ])
   } catch (err) {
+    expired = true
     warning($, `s1-auto-router decision log failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }

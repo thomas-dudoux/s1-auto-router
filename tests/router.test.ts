@@ -6,7 +6,7 @@ const HOME = '/home/u'
 const ROOT = '/proj'
 const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
-type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; notReady?: boolean; noSocket?: boolean }
+type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; responseBlock?: Promise<void>; notReady?: boolean; noSocket?: boolean }
 
 function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void>; readErrors?: Record<string, string>; envBlock?: { name: string; wait: Promise<void>; when?: () => boolean } } = {}) {
   const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
@@ -34,6 +34,7 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
     w.requests.push({ url: e.url, socketPath: e.init?.socketPath, body: JSON.parse(e.init.body) })
     if (s1.refuse) return { deny: 'ECONNREFUSED' }
     if (s1.hang) await new Promise(() => {})
+    if (s1.responseBlock) await s1.responseBlock
     const answers = Object.fromEntries(Object.entries(s1.answers ?? {}).map(([id, probs]) =>
       [id, { probs, confidence: Math.max(...Object.values(probs)) }]))
     const text = s1.text ?? JSON.stringify({ version: 1, model: s1.model ?? 'decider-2b-v11', answers })
@@ -534,9 +535,8 @@ test('fails open when S1 takes over 5 s', async ($, on) => {
   await p
   expect(w.spawned).toMatchObject(call()); expect(w.spawned.model).toBeUndefined()
   expect(w.logs.some(l => l.includes('timeout'))).toBe(true)
-  const entry = JSON.parse(w.processes.find(p => p.init?.stdin).init.stdin)
-  expect(entry.latency_ms).toBe(5000)
-  expect(entry.reasons.fail_open).toBe('S1 timeout over 5000 ms')
+  expect(w.logs.some(l => l.includes('S1 timeout over 5000 ms'))).toBe(true)
+  expect(w.processes).toHaveLength(0)
 })
 
 test('the total 5 s budget includes definition reads, with no late request or toast', async ($, on) => {
@@ -617,7 +617,7 @@ for (const option of ['toString', 'constructor', '__proto__']) {
 }
 
 test('the env Routing Config wins whole over project and user files', async ($, on) => {
-  const w = world(on, {}, {
+  const w = world(on, { noSocket: true }, {
     '/shared/routing.json': customConfig('opus'),
     [`${ROOT}/.claude/s1-auto-router.yaml`]: customConfig('haiku'),
     [`${HOME}/.claude/s1-auto-router.json`]: customConfig('sonnet'),
@@ -834,19 +834,47 @@ test('S1_MODEL=4B matches a running 4B Decider without a mismatch warning', asyn
 })
 
 
-test('constant Model and Effort trees route without making an empty S1 request', async ($, on) => {
-  const w = world(on, { refuse: true }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium') })
-  await $.tool.call(call({ effort: undefined }))
-  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium' })
+test('constant Model and Effort trees route after setup without a socket or S1 start', async ($, on) => {
+  const w = world(on, { noSocket: true, refuse: true }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium') })
+  await $.tool.call(call({ effort: undefined, prompt: taggedPrompt }))
+  expect(w.spawned).toMatchObject({ model: 'sonnet', effort: 'medium', prompt: taggedPrompt })
   expect(w.requests).toHaveLength(0)
+  expect(w.processes.filter(p => p.argv.includes('s1.setup'))).toHaveLength(0)
   const entry = JSON.parse(w.processes[0].init.stdin)
   expect(entry.latency_ms).toBe(null)
   expect(entry.s1_model).toBe(null)
 })
 
+test('constant trees still fail open before setup without starting S1', async ($, on) => {
+  const w = world(on, { notReady: true, noSocket: true }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('sonnet', 'medium') })
+  await $.tool.call(call({ effort: undefined }))
+  expect(w.spawned).toMatchObject(call({ effort: undefined }))
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.requests).toHaveLength(0)
+  expect(w.processes.filter(p => p.argv.includes('s1.setup'))).toHaveLength(0)
+  expect(JSON.parse(w.processes[0].init.stdin).reasons.skip).toBe('S1 not set up')
+})
+
+for (const source of ['call', 'frontmatter']) {
+  test(`an Explicit Model from ${source} removes inference for a mixed config without a socket`, async ($, on) => {
+    const w = world(on, { noSocket: true }, {
+      [`${ROOT}/.claude/s1-auto-router.json`]: customConfig({ if: 'costly', then: 'opus', else: 'haiku' }, 'medium', {
+        questions: { costly: { type: 'yesno', text: 'Costly?' } },
+      }),
+      ...(source === 'frontmatter' ? { [`${ROOT}/.claude/agents/Explore.md`]: '---\nmodel: sonnet\n---\n' } : {}),
+    })
+    await $.tool.call(call({ effort: undefined, ...(source === 'call' ? { model: 'sonnet' } : {}) }))
+    expect(w.spawned.effort).toBe('medium')
+    expect(w.spawned.model).toBe(source === 'call' ? 'sonnet' : undefined)
+    expect(w.requests).toHaveLength(0)
+    expect(w.processes.filter(p => p.argv.includes('s1.setup'))).toHaveLength(0)
+    expect(JSON.parse(w.processes[0].init.stdin).explicit.model).toBe('sonnet')
+  })
+}
+
 
 test('the decision log distinguishes raw values, Parent Ceiling clamps and the applied values', async ($, on) => {
-  const w = world(on, {}, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('opus', 'high') })
+  const w = world(on, { noSocket: true }, { [`${ROOT}/.claude/s1-auto-router.json`]: customConfig('opus', 'high') })
   for await (const _ of $.turn.step({ model: 'sonnet', effort: 'medium' } as any)) {}
   await $.tool.call(call({ effort: undefined }))
   const entry = JSON.parse(w.processes[0].init.stdin)
@@ -900,4 +928,53 @@ test('a blocked log HOME read is bounded and cannot trigger a late append', asyn
   finally { release(); await w.clock.advance(1000); await pending }
   expect(w.processes).toHaveLength(0)
   expect(w.logs.some(l => l.includes('decision log failed'))).toBe(true)
+})
+
+test('a hung S1 request and blocked logging release the fallback Spawn at the total 5 s deadline', async ($, on) => {
+  let release!: () => void
+  const wait = new Promise<void>(resolve => { release = resolve })
+  let w: ReturnType<typeof world>
+  w = world(on, { hang: true }, {}, {}, { envBlock: { name: 'HOME', wait, when: () => w.logs.some(l => l.includes('fail-open')) } })
+  const pending = $.tool.call(call())
+  await w.clock.advance(4999)
+  expect(w.spawned).toBeUndefined()
+  await w.clock.advance(1)
+  try { expect(w.spawned).toMatchObject(call()) }
+  finally { release(); await w.clock.advance(1001); await pending }
+  expect(w.spawned.model).toBeUndefined()
+  expect(w.processes).toHaveLength(0)
+  expect(w.logs.some(l => l.includes('S1 timeout over 5000 ms'))).toBe(true)
+})
+
+test('a late Routing result survives blocked logging and proceeds at the total deadline without a late append', async ($, on) => {
+  let respond!: () => void
+  let release!: () => void
+  const responseBlock = new Promise<void>(resolve => { respond = resolve })
+  const wait = new Promise<void>(resolve => { release = resolve })
+  let w: ReturnType<typeof world>
+  w = world(on, { responseBlock, answers: { M1: kind('locate'), M2: no, M3: no } }, {}, {},
+    { envBlock: { name: 'HOME', wait, when: () => w.requests.length > 0 } })
+  const pending = $.tool.call(call())
+  await w.clock.advance(4500)
+  respond()
+  await w.clock.advance(499)
+  expect(w.spawned).toBeUndefined()
+  await w.clock.advance(1)
+  try { expect(w.spawned).toMatchObject({ ...call(), model: 'haiku' }) }
+  finally { release(); await w.clock.advance(1001); await pending }
+  expect(w.processes).toHaveLength(0)
+  expect(w.logs.some(l => l.includes('decision log failed'))).toBe(true)
+})
+
+test('the decision writer process receives only the time left in the total Routing budget', async ($, on) => {
+  let respond!: () => void
+  const responseBlock = new Promise<void>(resolve => { respond = resolve })
+  const w = world(on, { responseBlock, answers: { M1: kind('locate'), M2: no, M3: no } })
+  const pending = $.tool.call(call())
+  await w.clock.advance(4500)
+  respond()
+  await w.clock.advance(0)
+  await pending
+  expect(w.spawned.model).toBe('haiku')
+  expect(w.processes[0].init.timeoutMs).toBe(500)
 })

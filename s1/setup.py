@@ -15,9 +15,9 @@ READY = CACHE / "ready.json"
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def health():
+def health(timeout=1):
     try:
-        status, body = post(SOCKET, "/v1/health", {}, timeout=1)
+        status, body = post(SOCKET, "/v1/health", {}, timeout=timeout)
         return body if status == 200 and isinstance(body, dict) and body.get("version") == 1 and body.get("model") else None
     except (OSError, ValueError, http.client.HTTPException):
         return None
@@ -37,7 +37,7 @@ def start():
 
 def stop():
     """Ask the shared daemon to stop; never kill an unverified PID from a stale file."""
-    if not health():
+    if not health(timeout=30):
         try:
             lock = daemon_lock(SOCKET)
         except BlockingIOError as error:
