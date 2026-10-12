@@ -8,6 +8,14 @@ Automatically picks the Model and Effort of a spawned agent with a small local d
 One call to the `Agent` tool that starts a subagent.
 _Avoid_: launch, invocation
 
+**Work Role**:
+The kind of work assigned to a Spawn, such as scouting, implementation or architecture. A Work Role does not determine a fixed Model or Effort.
+_Avoid_: model role, model label
+
+**Solution Space**:
+The Parent's description of the decisions still unresolved about how to complete a Spawn's task. It is distinct from the amount of work and the cost of a mistake.
+_Avoid_: task size, workload
+
 **Model**:
 Which Claude model a spawned agent runs on (haiku, sonnet, opus, fable).
 _Avoid_: tier
