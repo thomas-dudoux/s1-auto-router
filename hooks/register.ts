@@ -26,6 +26,10 @@ type Decision = {
 let setupNoticeShown = false
 
 export const register: Register = (on) => {
+  on('tool.describe', { tool: 'Agent' }, async ($, e, next) => {
+    const result = await next(e)
+    return { ...result, description: result.description + '\n\nS1 routing: use your Parent context to start the prompt with <metadata><work-role>short work description</work-role><solution-space>decisions still unresolved about the approach, or state that the approach is settled</solution-space></metadata>, then <prompt>the complete assignment</prompt>. Suggested Work Roles: scout, implementer, architect, reviewer, synthesizer; other short descriptions are welcome. Work Role describes the work, not a fixed Model or Effort. Solution Space describes unresolved decisions, not workload or mistake cost; include scope, risk and verification in the assignment. Keep metadata concise. Missing or invalid metadata falls back to inference from the assignment. Routing preserves the original prompt for the subagent.' }
+  })
   on('turn.step', async function* ($, e, next) {
     parents.set(e.agentId ?? 'main', { model: e.model, effort: e.effort })
     return yield* next(e)
