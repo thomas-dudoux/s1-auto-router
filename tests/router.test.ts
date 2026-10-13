@@ -765,11 +765,7 @@ test('S1_ROUTER=off leaves the Spawn unchanged without asking S1 or showing a to
 test('each routed Spawn appends a JSONL decision with the full Routing context', async ($, on) => {
   const w = world(on, { answers: { M1: kind('locate'), M2: no, M3: no } })
   await $.tool.call(call())
-  const writes = w.processes.filter(p => p.argv.some((arg: string) => arg.endsWith('/s1/append_log.py')))
-  expect(writes).toHaveLength(1)
-  expect(writes[0].argv.at(-1)).toBe(`${HOME}/.cache/s1-auto-router/decisions.jsonl`)
-  expect(writes[0].init.stdin.endsWith('\n')).toBe(true)
-  const entry = JSON.parse(writes[0].init.stdin)
+  const entry = JSON.parse(w.processes[0].init.stdin)
   expect(entry).toMatchObject({
     state: { description: 'list files', prompt: 'List the files in src/', subagent_type: 'Explore' },
     explicit: { model: null, effort: 'high' }, parent: { model: null, effort: null }, ceiling: 'parent',

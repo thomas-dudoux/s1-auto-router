@@ -28,11 +28,9 @@ def start():
     if health():
         return
     CACHE.mkdir(mode=0o700, parents=True, exist_ok=True)
-    log = os.open(CACHE / "daemon.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-    with os.fdopen(log, "ab") as out:
-        subprocess.Popen([sys.executable, "-m", "s1.daemon"], cwd=ROOT,
-                         env={**os.environ, "HF_HUB_OFFLINE": "1"}, start_new_session=True,
-                         stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+    subprocess.Popen([sys.executable, "-u", "-m", "s1.daemon", "--managed"], cwd=ROOT,
+                     env={**os.environ, "HF_HUB_OFFLINE": "1"}, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def stop():

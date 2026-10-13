@@ -1,26 +1,33 @@
-"""Append one private decision line, also tightening an existing file's mode."""
-import fcntl
-import os
+"""Append one complete decision record using the current private logging policy."""
+
 import sys
+from pathlib import Path
+
+from s1.log_retention import RotatingLog, load_policy
 
 
-def main():
-    path = sys.argv[1]
-    data = sys.stdin.buffer.read()
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+def _read_record(max_bytes: int) -> bytes:
+    chunks = []
+    remaining = max_bytes + 1
+    while remaining:
+        chunk = sys.stdin.buffer.read(min(64 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def main() -> int:
     try:
-        os.fchmod(fd, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        view = memoryview(data)
-        while view:
-            written = os.write(fd, view)
-            if written == 0:
-                raise OSError("decision append made no progress")
-            view = view[written:]
-    finally:
-        os.close(fd)
+        policy = load_policy()
+        data = _read_record(policy.max_bytes)
+        RotatingLog(Path(sys.argv[1]), policy).append(data, record=True)
+    except (OSError, ValueError) as exc:
+        print(f"s1-auto-router: decision log append failed: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

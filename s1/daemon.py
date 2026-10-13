@@ -13,6 +13,7 @@ import os
 import signal
 import socket
 import socketserver
+import sys
 import threading
 import time
 from pathlib import Path
@@ -159,26 +160,38 @@ def serve(s1, path: str = SOCKET, *, lock=None, idle_seconds=30 * 60):
         raise
 
 
-def main():
+def _run(lock):
     from s1.runtime import load
 
+    s1 = load(os.environ.get("S1_MODEL", "2B"))
+    server = serve(s1, lock=lock)
     try:
-        lock = daemon_lock(SOCKET)
-    except BlockingIOError:
-        return  # a concurrent session won the lock
-    try:
-        s1 = load(os.environ.get("S1_MODEL", "2B"))
-        server = serve(s1, lock=lock)
-    except BaseException:
-        lock.close()
-        raise
-    signal.signal(signal.SIGTERM, lambda *_: server.stop())
-    signal.signal(signal.SIGINT, lambda *_: server.stop())
-    print(f"S1 daemon: {s1.name} on {SOCKET}", flush=True)
-    try:
+        signal.signal(signal.SIGTERM, lambda *_: server.stop())
+        signal.signal(signal.SIGINT, lambda *_: server.stop())
+        print(f"S1 daemon: {s1.name} on {SOCKET}", flush=True)
         server.serve_forever()
     finally:
         server.server_close()
+
+
+def main():
+    args = sys.argv[1:]
+    if args not in ([], ["--managed"]):
+        raise ValueError("usage: python -m s1.daemon [--managed]")
+    try:
+        lock = daemon_lock(SOCKET)
+    except BlockingIOError:
+        return  # a concurrent session won the lock, before capture or model imports
+    try:
+        if args:
+            from s1.daemon_logging import capture
+
+            with capture(Path(SOCKET).parent / "daemon.log"):
+                _run(lock)
+        else:
+            _run(lock)
+    finally:
+        lock.close()
 
 
 if __name__ == "__main__":

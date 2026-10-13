@@ -13,3 +13,4 @@ S1 runs as a single Python (uv) daemon shared by every Claude Code session, list
 - The first Spawn after a cold start usually exceeds the budget and goes un-routed. That's accepted.
 - The mod and the daemon talk through a versioned request shape, because one daemon can outlive several mod reloads.
 - The daemon speaks HTTP/1.1 on the unix socket (`POST /v1/answer`), not a raw protocol: a mod cannot import `node:net`, and `$.http.fetch(url, { socketPath })` is its only way to reach a socket.
+- Managed daemon stdout/stderr flow through an in-process pipe reader and a bounded writer queue. A blocked log writer does not block pipe draining; overload drops output. Size/count rotation uses a stable per-log lock and the user-wide logging policy, independent of Routing Config. Direct foreground execution keeps its inherited streams. Activating new daemon code or logging settings requires the existing explicit restart.

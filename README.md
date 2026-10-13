@@ -184,6 +184,31 @@ The commented default file gives the question and rule formats.
 [Solution Space routing](docs/design/solution-space-routing.md) describes a separate experimental configuration.
 Installation does not activate that configuration.
 
+### Log retention configuration
+
+Both logs use one user-wide file: `~/.config/s1-auto-router/logging.json`.
+Create its parent directory if necessary. The following values are the defaults:
+
+```json
+{
+  "max_bytes": 10485760,
+  "backup_count": 3
+}
+```
+
+`max_bytes` is a positive integer byte limit per file; the default is 10 MiB.
+`backup_count` is a nonnegative integer archive count per log.
+The value `0` keeps only the active file.
+Either field can be omitted to use its default.
+The file must be a JSON object no larger than 64 KiB, with no other fields.
+A missing file uses defaults. An unreadable or invalid file uses defaults and produces a best-effort warning.
+This file is separate from Routing Config and applies to all projects and sessions.
+
+Decision logging reads the file on each append.
+The managed daemon reads it once at startup.
+Use `/s1-setup --restart` to apply a change to an active daemon.
+There is no live configuration reload.
+
 ## Updates
 
 1. Update the marketplace from your terminal.
@@ -203,6 +228,8 @@ Installation does not activate that configuration.
 
 Each installed version uses its own Python environment.
 The restart also replaces the daemon that used the previous version.
+This explicit restart also activates live daemon log rotation.
+An update does not restart a running daemon automatically.
 
 ## Troubleshooting
 
@@ -233,10 +260,20 @@ Decisions can contain prompt text, task metadata, questions, probabilities, sele
 The default prompt limit is 4,000 characters.
 The limit does not include all other fields.
 
-The log file has owner-only read and write permissions.
-The plugin does not limit the log size or remove old log data.
+The active logs and their archives have owner-only read and write permissions.
+The managed daemon writes raw process output to `~/.cache/s1-auto-router/daemon.log`.
+Direct `python -m s1.daemon` execution keeps its inherited terminal streams.
 
-The daemon writes process output to `~/.cache/s1-auto-router/daemon.log`.
+Both logs rotate during logging activity according to [Log retention configuration](#log-retention-configuration).
+Archives are uncompressed: `.1` is newest, followed by `.2` and `.3` with the default policy.
+Rotation deletes the oldest archive. There is no age-based expiry or cleanup while inactive.
+An existing active file or archive larger than the configured maximum is deleted when encountered.
+Excess numbered archives are also removed.
+
+Decision records stay complete JSONL; a record larger than the limit is dropped with a best-effort warning.
+Raw daemon output can split across files, including within a line or UTF-8 sequence.
+Live daemon rotation does not restart or reload the model.
+Logging errors or a full daemon output queue can lose data, but do not stop Routing or S1.
 
 `S1_ROUTER=off` does not stop decision logs or the task metadata instruction.
 Disable the plugin to stop its hooks in new sessions.
@@ -262,9 +299,10 @@ To remove the installed plugin, enter this command:
 claude plugin uninstall s1-auto-router@s1-auto-router --scope user
 ```
 
-Removal does not remove decision logs or model downloads.
+Removal does not remove either log, its archives, log retention configuration, or model downloads.
 The daemon can stay active until its 30-minute idle limit.
 After the daemon stops, you can remove `~/.cache/s1-auto-router` to erase its logs and local state.
+Remove `~/.config/s1-auto-router/logging.json` separately if you no longer need the retention settings.
 Decider model files stay in the Hugging Face cache.
 
 ## More information

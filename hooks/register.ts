@@ -257,10 +257,11 @@ async function appendDecision($: Engine, decision: Decision, deadline: Promise<n
         const remaining = Math.min(1000, BUDGET_MS - ((await $.clock.now()) - Date.parse(decision.timestamp)))
         if (expired || remaining <= 0) throw new Error('decision append timed out')
         const { started_ms, ...entry } = decision
-        const result = await $.process.run(['python3', `${$.plugin.root}/s1/append_log.py`, `${home}/.cache/s1-auto-router/decisions.jsonl`], {
-          stdin: JSON.stringify(entry) + '\n', timeoutMs: remaining,
+        const result = await $.process.run(['python3', '-m', 's1.append_log', `${home}/.cache/s1-auto-router/decisions.jsonl`], {
+          cwd: $.plugin.root, stdin: JSON.stringify(entry) + '\n', timeoutMs: remaining, env: { HOME: home },
         })
         if (result.exitCode !== 0) throw new Error(result.stderr || `exit ${result.exitCode}`)
+        if (result.stderr) warning($, `s1-auto-router decision log warning: ${result.stderr}`)
       })(),
       $.clock.sleep(1000).then(() => { expired = true; throw new Error('decision append timed out') }),
       deadline,
