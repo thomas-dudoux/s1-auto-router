@@ -15,7 +15,7 @@ They do not grant a license for the rest of this project.
 
 The MIT license applies to each component above.
 Astral offers a choice of the MIT or Apache 2.0 license. This distribution uses the MIT option.
-The relative links in `.claude/skills/` refer to the same copied skill files.
+The relative links in `.omp/skills/` refer to the same copied skill files.
 
 ```text
 Permission is hereby granted, free of charge, to any person obtaining a copy

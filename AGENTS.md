@@ -12,11 +12,25 @@ Mod layout: `hooks/register.ts` holds the hooks and every function that touches 
 - Terms: `GLOSSARY.md` (Spawn, Routing, Explicit value, Ceiling, Abstain, Routing Config…). Use them.
 - Architecture: `docs/adr/*.md`.
 
+## Development agent and worktrees
+
+Use omp for development. `.omp/` contains the native MCP configuration and skill links into `.agents/skills/`. `AGENTS.md` is the shared context file.
+
+The product remains a Claude Code plugin: `.claude-plugin/`, the `claude plugin` validation commands, and `.claude/` paths used by the router are product interfaces, not development-agent configuration.
+
+`orca.yaml` prepares each worktree's own Python environment before starting its agent. In Orca's repository settings, set **When to run → Run by default** and **Command Source → orca.yaml only**; approve the hook trust prompt when shown. Keep `.venv` out of Worktree Shared Paths.
+
+The omp configuration is versioned; `.worktreeinclude` copies ignored `.scratch/` state and the local `orca.yaml` from the primary checkout. New worktrees need a start-from revision containing the omp configuration and a primary checkout containing `orca.yaml`.
+
+Headroom's proxy is managed separately from omp. Configure `providers.openai.baseUrl` and `providers.openai-codex.baseUrl` in the active omp user/profile `models.yml` as `http://127.0.0.1:8787/v1`. This affects other projects using that user/profile; `.omp/mcp.json` exposes Headroom tools but does not route inference.
+
+To start the existing local deployment, run `uvx --python 3.13 --from 'headroom-ai[mcp,proxy]==0.40.0' headroom install start --profile init-s1-auto-router-fb154248`. omp does not start or restart the proxy; the configured providers require it to be running.
+
 ## Python environment
 
 Managed by uv: Python 3.13 in `.venv/`, deps `decider-ai[metal]` and `mlx-lm` in `pyproject.toml`.
 
-- `uv sync`: install the dependencies.
+- `uv sync --locked --group dev`: install the runtime and development dependencies, including Serena's local `ty` executable.
 - `uv run hf download midium-ai/decider-2b-dwq-4bit`: download the model (~1.06 GB, into `~/.cache/huggingface`).
 - The `decider-ai` package is imported as `decider`. It cannot load the MLX DWQ checkpoint, so `s1/runtime.py` runs the forward pass on `mlx-lm` and reuses decider's torch-free prompt helpers (`decider.prompt`, `decider.systemone`). Never import `decider.infer`, because it loads torch.
 
@@ -37,7 +51,7 @@ The repo root is the plugin (`.claude-plugin/plugin.json`, `hooks/hooks.json`).
 
 ## Conventions
 
-- Commit messages follow the Conventional Commits spec. The `conventional-commit` skill is installed for this: it lives in `.agents/skills/conventional-commit/`, `.claude/skills/conventional-commit` symlinks to it.
+- Commit messages follow the Conventional Commits spec. The `conventional-commit` skill is installed for this: it lives in `.agents/skills/conventional-commit/`, `.omp/skills/conventional-commit` symlinks to it.
 
 ## Agent skills
 

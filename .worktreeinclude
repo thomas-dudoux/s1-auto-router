@@ -1,3 +1,2 @@
 .scratch/
-.codex/config.toml
-.codex/hooks.json
+orca.yaml

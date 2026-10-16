@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/can1357/oh-my-pi/main/packages/coding-agent/src/config/mcp-schema.json",
+  "mcpServers": {
+    "headroom": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--python", "3.13", "--from", "headroom-ai[mcp,proxy]==0.40.0", "headroom", "mcp", "serve"],
+      "timeout": 60000
+    }
+  }
+}

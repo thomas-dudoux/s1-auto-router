@@ -19,7 +19,7 @@ pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py311"
-extend-exclude = [".agents", ".claude", ".scratch"]
+extend-exclude = [".agents", ".omp", ".scratch"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM", "C901"]
@@ -31,4 +31,4 @@ max-complexity = 10
 python-version = "3.11"
 
 [tool.ty.src]
-exclude = [".agents/**", ".claude/**", ".scratch/**"]
+exclude = [".agents/**", ".omp/**", ".scratch/**"]
