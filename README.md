@@ -48,24 +48,25 @@ This is a test system, not a minimum memory specification.
    claude
    ```
 
-4. At the Claude Code prompt, enter the setup command.
+The plugin prepares S1 automatically when the session starts.
+It installs the Python environment for this installed plugin version if that environment is missing.
+It reuses cached model files, downloads missing files, and starts the shared local daemon if necessary.
+Startup waits for the daemon and a test request before Routing begins.
+The first startup can take longer because of dependency installation and the model download.
+Later conversations reuse the environment and the same daemon; you do not need to run `/s1-setup` each time.
 
-   ```text
-   /s1-setup
-   ```
+If automatic setup fails, the session continues and reports the failure. Subagent tasks proceed unchanged when S1 is unavailable.
+At the Claude Code prompt, enter `/s1-setup` to retry.
+Manual setup refreshes the Python dependencies and runs the same daemon test.
 
-Setup installs the Python dependencies, downloads the model if necessary, and starts the local daemon.
-The daemon is a background process that answers requests from the plugin.
-Setup then sends a test request to the daemon.
-After a correct test, setup shows this message:
+To disable automatic setup and startup, start Claude Code with:
 
-```text
-S1 ready: decider-2b-v11; smoke request passed.
+```sh
+S1_AUTO_START=off claude
 ```
 
-The message can include more instructions.
-This test examines the local model.
-The next procedure examines a subagent task.
+Then enter `/s1-setup` when you want to prepare S1.
+The opt-out does not disable Routing for an already prepared installation or the existing lazy restart after the daemon exits.
 
 ## First routing test
 
@@ -135,7 +136,8 @@ Set environment variables before you start Claude Code.
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `S1_MODEL` | `2B` | Selects the local Decider model. The permitted values are `2B` and `4B`. |
-| `S1_ROUTER` | Unset | The value `off` stops model and effort selection. It does not stop decision logs. |
+| `S1_AUTO_START` | Unset | The value `off` disables automatic session-start setup and startup. `/s1-setup` remains available. Routing and lazy daemon restart are unchanged. |
+| `S1_ROUTER` | Unset | The value `off` stops model and effort selection and automatic session-start setup. It does not stop decision logs or disable `/s1-setup`. |
 | `S1_ROUTER_CEILING` | `parent` | The value `none` removes the parent ceiling. |
 | `S1_ROUTER_CONFIG` | Unset | Gives the path to a routing configuration file. |
 
@@ -201,8 +203,8 @@ Installation does not activate that configuration.
 3. Start a new Claude Code session.
 4. At the Claude Code prompt, enter `/s1-setup --restart`.
 
-Each installed version uses its own Python environment.
-The restart also replaces the daemon that used the previous version.
+Each installed version uses its own Python environment; session startup prepares a missing environment automatically.
+The explicit restart also replaces the daemon that used the previous version.
 
 ## Troubleshooting
 
@@ -217,7 +219,8 @@ The restart also replaces the daemon that used the previous version.
 | The reason is `explicit` | The Agent call or definition gives the values. |
 | The reason is `abstain` | A Decider answer does not have sufficient confidence. The plugin keeps the initial output value. |
 | The reason is `S1 cold start` | The daemon starts in the background. Give the subagent one more task after startup. |
-| The reason is `S1 not set up` | Enter `/s1-setup` in the session that loads the installed plugin. |
+| Automatic setup fails | Check that `uv` is available and model downloads can reach Hugging Face. Enter `/s1-setup` to retry. |
+| The reason is `S1 not set up` | The shared readiness marker or this installed plugin's Python environment is missing. If automatic startup is disabled, enter `/s1-setup`; otherwise inspect the automatic setup warning and retry. |
 | The terminal shows a routing configuration error | Compare the file with the commented default configuration. |
 
 ## Data storage

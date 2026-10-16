@@ -37,18 +37,22 @@ export const register: Register = (on) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     await $.command.register({ name: 's1-setup', description: 'Prepare S1 and run a smoke request', argumentHint: '[--restart]' })
+    try {
+      if (await $.env.get('S1_AUTO_START') !== 'off' && await $.env.get('S1_ROUTER') !== 'off') {
+        const setup = await setupS1($, false, false)
+        if (setup.exitCode !== 0) throw new Error(setup.text || `exit ${setup.exitCode}`)
+      }
+    } catch (err) {
+      const text = `S1 automatic setup failed: ${err instanceof Error ? err.message : String(err)}; run /s1-setup`
+      warning($, text)
+      toast($, text)
+    }
     return result
   })
 
   on('command.run', { command: 's1-setup' }, async ($, e) => {
     if (e.args.trim() !== '' && e.args.trim() !== '--restart') return { text: 'Usage: /s1-setup [--restart]', exitCode: 1 }
-    const model = await $.env.get('S1_MODEL') ?? '2B'
-    if (model !== '2B' && model !== '4B') return { text: 'S1_MODEL must be 2B or 4B', exitCode: 1 }
-    const sync = await $.process.run(['uv', 'sync', '--project', $.plugin.root], { timeoutMs: 600_000 })
-    if (sync.exitCode !== 0) return { text: `S1 environment setup failed: ${sync.stderr}`, exitCode: sync.exitCode }
-    const result = await $.process.run([`${$.plugin.root}/.venv/bin/python`, '-m', 's1.setup', ...(e.args.trim() ? ['--restart'] : [])],
-      { cwd: $.plugin.root, env: { S1_MODEL: model }, timeoutMs: 600_000 })
-    return { text: result.stdout || result.stderr, exitCode: result.exitCode }
+    return setupS1($, true, e.args.trim() === '--restart')
   })
 
 
@@ -90,6 +94,19 @@ export const register: Register = (on) => {
     if (!expired) await appendDecision($, decision, deadline)
     return next(patch ? { ...e, ...patch } : e)
   })
+}
+
+async function setupS1($: Engine, refresh: boolean, restart: boolean) {
+  const model = await $.env.get('S1_MODEL') ?? '2B'
+  if (model !== '2B' && model !== '4B') return { text: 'S1_MODEL must be 2B or 4B', exitCode: 1 }
+  const python = `${$.plugin.root}/.venv/bin/python`
+  if (refresh || !await $.fs.exists(python)) {
+    const sync = await $.process.run(['uv', 'sync', '--project', $.plugin.root], { timeoutMs: 600_000 })
+    if (sync.exitCode !== 0) return { text: `S1 environment setup failed: ${sync.stderr}`, exitCode: sync.exitCode }
+  }
+  const result = await $.process.run([python, '-m', 's1.setup', ...(restart ? ['--restart'] : [])],
+    { cwd: $.plugin.root, env: { S1_MODEL: model }, timeoutMs: 600_000 })
+  return { text: result.stdout || result.stderr, exitCode: result.exitCode }
 }
 
 /** The Routing flow for one Spawn: what to change on the Agent call, or undefined to leave it as written. */
