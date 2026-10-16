@@ -6,10 +6,13 @@ const HOME = '/home/u'
 const ROOT = '/proj'
 const SOCKET = `${HOME}/.cache/s1-auto-router/s1.sock`
 
-type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; responseBlock?: Promise<void>; notReady?: boolean; noSocket?: boolean }
+type S1 = { model?: string; logFailure?: boolean; toastFailure?: boolean; answers?: Record<string, Record<string, number>>; text?: string; status?: number; refuse?: boolean; hang?: boolean; responseBlock?: Promise<void>; notReady?: boolean; noSocket?: boolean; noPython?: boolean; daemon?: number }
+type ProcessEvent = { argv: string[]; init?: { stdin?: string; timeoutMs?: number } }
+type ProcessReply = { value: { exitCode: number; stdout: string; stderr: string } } | { deny: string } | undefined
+type WorldSetup = { parentModel?: string; readBlock?: Promise<void>; readErrors?: Record<string, string>; process?: (event: ProcessEvent) => ProcessReply | void; envBlock?: { name: string; wait: Promise<void>; when?: () => boolean } }
 
-function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: { parentModel?: string; readBlock?: Promise<void>; readErrors?: Record<string, string>; envBlock?: { name: string; wait: Promise<void>; when?: () => boolean } } = {}) {
-  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], session: 'session-test' }
+function world(on: Parameters<typeof mock.clock>[0], s1: S1 = {}, files: Record<string, string> = {}, env: Record<string, string> = {}, setup: WorldSetup = {}) {
+  const w = { logs: [] as string[], toasts: [] as string[], requests: [] as any[], spawned: undefined as any, clock: mock.clock(on), processes: [] as any[], commands: [] as any[], session: 'session-test' }
   on('env.get', async ($: any, e: any) => {
     if (setup.envBlock?.name === e.name && (setup.envBlock.when?.() ?? true)) await setup.envBlock.wait
     return { value: ({ HOME, ...env } as Record<string, string>)[e.name] }
@@ -17,10 +20,28 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
   on('session.root', () => ({ value: ROOT }))
   on('session.id', () => ({ value: w.session }))
   on('session.model', () => ({ value: setup.parentModel }))
+  on('session.start', ($, e) => e)
+  const commands: { name: string }[] = []
+  on('command.register', ($: unknown, e: { name: string }) => { commands.push(e); return { value: undefined } })
   on('turn.step', async function* () { return { answer: '', toolUses: [] } })
-  on('process.run', ($: any, e: any) => { w.processes.push(e); if (s1.logFailure) return { deny: 'disk full' }; return { value: { exitCode: 0, stdout: '', stderr: '' } } })
+  on('process.run', ($: unknown, e: ProcessEvent) => {
+    w.processes.push(e)
+    if (setup.process) {
+      const result = setup.process(e)
+      if (result !== undefined) return result
+    }
+    if (s1.logFailure) return { deny: 'disk full' }
+    if (e.argv[0] === 'uv') s1.noPython = false
+    if (e.argv.includes('s1.setup') && !e.argv.includes('start')) {
+      if (s1.noPython) return { value: { exitCode: 1, stdout: '', stderr: 'missing Python' } }
+      s1.notReady = false
+      s1.noSocket = false
+      if (!s1.daemon || e.argv.includes('--restart')) s1.daemon = (s1.daemon ?? 0) + 1
+    }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } }
+  })
   on('fs.exists', ($: any, e: any) => ({ value: e.path === `${HOME}/.cache/s1-auto-router/ready.json` ? !s1.notReady
-    : e.path === SOCKET ? !s1.noSocket : e.path.endsWith('/.venv/bin/python') || Object.hasOwn(files, e.path) }))
+    : e.path === SOCKET ? !s1.noSocket : e.path.endsWith('/.venv/bin/python') ? !s1.noPython : Object.hasOwn(files, e.path) }))
 
   on('fs.read', async ($: any, e: any) => {
     if (setup.readBlock) await setup.readBlock
@@ -42,7 +63,7 @@ function world(on: any, s1: S1 = {}, files: Record<string, string> = {}, env: Re
     return { value: { status, ok: status < 300, headers: {}, text } }
   })
   on('tool.call', ($: any, e: any) => { w.spawned = e; return { result: 'ok' } })
-  return w
+  return Object.assign(w, { commands })
 }
 
 // Model-only fixtures pin Effort; Effort tests unset it explicitly.
@@ -973,4 +994,90 @@ test('the decision writer process receives only the time left in the total Routi
   await pending
   expect(w.spawned.model).toBe('haiku')
   expect(w.processes[0].init.timeoutMs).toBe(500)
+})
+
+for (const [name, initial] of [
+  ['shared ready marker with missing plugin Python', { noPython: true, noSocket: true }],
+  ['unprepared cache', { noPython: true, notReady: true, noSocket: true }],
+  ['cached environment with a cold daemon', { notReady: true, noSocket: true }],
+  ['healthy shared daemon', { daemon: 17 }],
+] as [string, S1][]) {
+  test(`session startup prepares the first Spawn: ${name}`, async ($, on) => {
+    const s1: S1 = { ...initial, answers: { M1: kind('locate'), M2: no, M3: no,
+      E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no } }
+    const w = world(on, s1, {}, {}, { process: () => {
+      expect(w.commands.some(command => command.name === 's1-setup')).toBe(true)
+    } })
+    const result = await $.session.start({ cwd: ROOT })
+    expect(result).toEqual({ cwd: ROOT })
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned).toMatchObject({ model: 'haiku', effort: 'low' })
+    expect(w.requests).toHaveLength(1)
+    expect(Boolean(s1.noPython)).toBe(false)
+    expect(s1.notReady).toBe(false)
+    expect(s1.noSocket).toBe(false)
+    expect(s1.daemon).toBe(initial.daemon ?? 1)
+    expect(w.processes.filter(process => process.argv[0] === 'uv')).toHaveLength(initial.noPython ? 1 : 0)
+  })
+}
+
+for (const variable of ['S1_AUTO_START', 'S1_ROUTER']) {
+  test(`${variable}=off suppresses startup but explicit setup repairs Routing`, async ($, on) => {
+    const env: Record<string, string> = { [variable]: 'off' }
+    const s1: S1 = { noPython: true, notReady: true, noSocket: true,
+      answers: { M1: kind('locate'), M2: no, M3: no, E1: { clear: 1, partly_open: 0, very_open: 0 }, E2: no, E3: no } }
+    const w = world(on, s1, {}, env)
+    await $.session.start({ cwd: ROOT })
+    expect(w.processes).toHaveLength(0)
+    expect(w.commands.some(command => command.name === 's1-setup')).toBe(true)
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned.model).toBeUndefined()
+    const result = await $.command.run({ command: 's1-setup', args: '' })
+    expect(result.exitCode).toBe(0)
+    // Router off disables Routing itself; explicit setup must still prepare it.
+    delete env.S1_ROUTER
+    await $.tool.call(call({ effort: undefined }))
+    expect(w.spawned).toMatchObject({ model: 'haiku', effort: 'low' })
+  })
+}
+
+for (const failure of ['sync', 'setup', 'throw', 'invalid model']) {
+  test(`automatic ${failure} failure preserves session, command and fail-open Spawn`, async ($, on) => {
+    const env: Record<string, string> = failure === 'invalid model' ? { S1_MODEL: 'invalid' } : {}
+    let fail = true
+    const s1: S1 = { noPython: true, notReady: true, noSocket: true, toastFailure: true,
+      answers: { M1: kind('locate'), M2: no, M3: no } }
+    const w = world(on, s1, {}, env, { process: e => {
+      if (!fail || e.argv.includes('append_log.py')) return
+      if (failure === 'throw') throw new Error('uv unavailable')
+      if ((failure === 'sync' && e.argv[0] === 'uv') || (failure === 'setup' && e.argv.includes('s1.setup'))) {
+        return { value: { exitCode: 1, stdout: '', stderr: 'setup unavailable' } }
+      }
+    } })
+    expect(await $.session.start({ cwd: ROOT })).toEqual({ cwd: ROOT })
+    expect(w.commands.some(command => command.name === 's1-setup')).toBe(true)
+    expect(w.logs.some(text => text.includes('automatic setup failed') && text.includes('/s1-setup'))).toBe(true)
+    expect(w.toasts.some(text => text.includes('/s1-setup'))).toBe(true)
+    await $.tool.call(call())
+    expect(w.spawned.model).toBeUndefined()
+    expect(w.requests).toHaveLength(0)
+    fail = false
+    delete env.S1_MODEL
+    expect((await $.command.run({ command: 's1-setup', args: '' })).exitCode).toBe(0)
+    await $.tool.call(call())
+    expect(w.spawned.model).toBe('haiku')
+  })
+}
+
+test('explicit setup refreshes a cached environment and restart replaces the daemon', async ($, on) => {
+  const s1: S1 = { daemon: 17, answers: { M1: kind('locate'), M2: no, M3: no } }
+  const w = world(on, s1, {}, { S1_AUTO_START: 'off' })
+  await $.session.start({ cwd: ROOT })
+  expect((await $.command.run({ command: 's1-setup', args: '' })).exitCode).toBe(0)
+  expect(s1.daemon).toBe(17)
+  expect((await $.command.run({ command: 's1-setup', args: '--restart' })).exitCode).toBe(0)
+  expect(s1.daemon).toBe(18)
+  expect(w.processes.filter(process => process.argv[0] === 'uv')).toHaveLength(2)
+  await $.tool.call(call())
+  expect(w.spawned.model).toBe('haiku')
 })
